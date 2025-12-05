@@ -1,0 +1,6 @@
+__pycache__/
+*.pt
+*.sf2
+*.wav
+midicaps_data/
+.DS_Store

@@ -1,0 +1,13 @@
+torch
+torchvision
+torchaudio
+transformers
+miditok
+miditoolkit
+datasets
+huggingface_hub
+gradio
+midi2audio
+scikit-learn
+tqdm
+numpy
