@@ -1,28 +1,37 @@
 import torch
 import os
 
-# --- PATHS ---
-# Automatic detection for local or Drive environment
-if os.path.exists("/content/drive/MyDrive"):
-    DRIVE_ROOT = "/content/drive/MyDrive"
-else:
-    DRIVE_ROOT = "."
+# --- PATH CONFIGURATION ---
+COLAB_DRIVE_PATH = "/content/drive/MyDrive"
 
-# Updated filename for the Transformer version
-SAVE_FILE = os.path.join(DRIVE_ROOT, "midi_search_MPNET_TRANSFORMER.pt")
-CACHE_FILE = os.path.join(DRIVE_ROOT, "dataset_midicaps_tokenized.pt")
+if os.path.exists(COLAB_DRIVE_PATH):
+    # Google Colab Environment
+    PROJECT_NAME = "MIDI_Retrieval_Project"
+    BASE_DIR = os.path.join(COLAB_DRIVE_PATH, PROJECT_NAME)
+    
+    os.makedirs(BASE_DIR, exist_ok=True)
+    print(f"Environment: Google Colab. Working directory: {BASE_DIR}")
+else:
+    # Local or Server Environment
+    BASE_DIR = "."
+    print(f"Environment: Local/Server. Working directory: Current Folder")
+
+# --- FILE PATHS ---
+SAVE_FILE = os.path.join(BASE_DIR, "midi_search_MPNET_TRANSFORMER.pt")
+CACHE_FILE = os.path.join(BASE_DIR, "dataset_midicaps_tokenized.pt")
 MIDI_DATA_DIR = "midicaps_data"
+
 HF_REPO_ID = "GiuseppeStilly/MIDI-Retrieval" 
 
 # --- AUDIO CONFIGURATION ---
 SOUNDFONT_PATH = "soundfont.sf2"
-SOUNDFONT_URL = "https://github.com/urish/cinto/raw/master/media/FluidR3_GM.sf2"
+SOUNDFONT_URL = "https://raw.githubusercontent.com/urish/cinto/master/media/FluidR3_GM.sf2"
 
 # --- MODEL HYPERPARAMETERS ---
 MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
 EMBED_DIM = 512          
 
-# Transformer Architecture Settings
+# Transformer Architecture
 MIDI_EMBED_DIM = 256     
 NUM_LAYERS = 4           
 NUM_HEADS = 4            
