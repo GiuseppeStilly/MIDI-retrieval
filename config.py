@@ -12,7 +12,7 @@ else:
 SAVE_FILE = os.path.join(DRIVE_ROOT, "midi_search_MPNET_TRANSFORMER.pt")
 CACHE_FILE = os.path.join(DRIVE_ROOT, "dataset_midicaps_tokenized.pt")
 MIDI_DATA_DIR = "midicaps_data"
-HF_REPO_ID = "GiuseppeStilly/midi-search-ensemble" # O il nome corretto del tuo repo HF
+HF_REPO_ID = "GiuseppeStilly/MIDI-Retrieval" 
 
 # --- AUDIO CONFIGURATION ---
 SOUNDFONT_PATH = "soundfont.sf2"
