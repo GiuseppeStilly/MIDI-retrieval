@@ -116,7 +116,7 @@ def main():
                     start_epoch = checkpoint['epoch'] + 1
                 if 'loss_history' in checkpoint:
                     loss_history = checkpoint['loss_history']
-                print(f"✅ Resuming from Epoch {start_epoch + 1}...")
+                print(f" Resuming from Epoch {start_epoch + 1}...")
 
         except Exception as e:
             print(f"Error loading checkpoint: {e}. Starting from scratch.")
@@ -198,7 +198,7 @@ def main():
         "loss_history": loss_history
     }, cfg.SAVE_FILE)
     
-    print(f"✅ Training Complete! Saved to {cfg.SAVE_FILE}")
+    print(f" Training Complete! Saved to {cfg.SAVE_FILE}")
 
 if __name__ == "__main__":
     main()

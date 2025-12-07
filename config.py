@@ -12,24 +12,27 @@ else:
 SAVE_FILE = os.path.join(DRIVE_ROOT, "midi_search_MPNET_TRANSFORMER.pt")
 CACHE_FILE = os.path.join(DRIVE_ROOT, "dataset_midicaps_tokenized.pt")
 MIDI_DATA_DIR = "midicaps_data"
+HF_REPO_ID = "GiuseppeStilly/midi-search-ensemble" # O il nome corretto del tuo repo HF
+
+# --- AUDIO CONFIGURATION ---
+SOUNDFONT_PATH = "soundfont.sf2"
+SOUNDFONT_URL = "https://github.com/urish/cinto/raw/master/media/FluidR3_GM.sf2"
 
 # --- MODEL HYPERPARAMETERS ---
-# Using MPNet (768 hidden size) instead of MiniLM
 MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
-EMBED_DIM = 512          # Dimension of the shared latent space
+EMBED_DIM = 512          
 
 # Transformer Architecture Settings
-MIDI_EMBED_DIM = 256     # MIDI token embedding size
-NUM_LAYERS = 4           # Number of Transformer Encoder layers
-NUM_HEADS = 4            # Number of Attention Heads
-FF_DIM = 1024            # Dimension of Feed Forward network
-DROPOUT = 0.1            # Dropout rate
-MAX_SEQ_LEN = 512        # Increased sequence length for Transformer
+MIDI_EMBED_DIM = 256     
+NUM_LAYERS = 4           
+NUM_HEADS = 4            
+FF_DIM = 1024            
+DROPOUT = 0.1            
+MAX_SEQ_LEN = 512        
 
 # --- TRAINING HYPERPARAMETERS ---
-# Adjusted for MPNet stability
 BATCH_SIZE = 64
-LEARNING_RATE = 5e-5     # Lower learning rate to prevent divergence
+LEARNING_RATE = 5e-5     
 EPOCHS = 20
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
