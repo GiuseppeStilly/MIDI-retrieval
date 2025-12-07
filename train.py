@@ -13,7 +13,7 @@ import numpy as np
 
 # Local imports
 import config as cfg
-from models import NeuralMidiSearchTransformer
+from model import NeuralMidiSearchTransformer
 
 # --- DATASET CLASS ---
 class MidiCapsDataset(Dataset):
