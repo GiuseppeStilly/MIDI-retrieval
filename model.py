@@ -6,10 +6,6 @@ import math
 import config as cfg
 
 class PositionalEncoding(nn.Module):
-    """
-    Standard Sinusoidal Positional Encoding for Transformers.
-    Injects information about the position of notes in the sequence.
-    """
     def __init__(self, d_model, max_len=5000, dropout=0.1):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
@@ -24,33 +20,24 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe.unsqueeze(0))
 
     def forward(self, x):
-        # x shape: [batch_size, seq_len, embedding_dim]
         x = x + self.pe[:, :x.size(1), :]
         return self.dropout(x)
 
 class NeuralMidiSearchTransformer(nn.Module):
     def __init__(self, midi_vocab_size):
         super().__init__()
-
-        # --- TEXT ENCODER (MPNet) ---
-        # Loads sentence-transformers/all-mpnet-base-v2 based on config
-        self.bert = AutoModel.from_pretrained(cfg.MODEL_NAME)
-        self.text_hidden_size = self.bert.config.hidden_size 
         
-        # Projection layer: 768 (MPNet) -> 512 (Shared Space)
+        # Text Encoder
+        self.bert = AutoModel.from_pretrained(cfg.MODEL_NAME)
+        self.text_hidden_size = self.bert.config.hidden_size
         self.text_proj = nn.Linear(self.text_hidden_size, cfg.EMBED_DIM)
 
-        # --- MIDI ENCODER (Transformer) ---
+        # MIDI Encoder
         self.midi_emb = nn.Embedding(midi_vocab_size, cfg.MIDI_EMBED_DIM)
         
-        # Positional Encoding
-        self.pos_encoder = PositionalEncoding(
-            d_model=cfg.MIDI_EMBED_DIM, 
-            dropout=cfg.DROPOUT,
-            max_len=cfg.MAX_SEQ_LEN + 100 # buffer
-        )
+        # Positional Encoding (uses default max_len=5000 to match checkpoint)
+        self.pos_encoder = PositionalEncoding(d_model=cfg.MIDI_EMBED_DIM, dropout=cfg.DROPOUT)
         
-        # Transformer Encoder Stack
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=cfg.MIDI_EMBED_DIM, 
             nhead=cfg.NUM_HEADS, 
@@ -61,14 +48,11 @@ class NeuralMidiSearchTransformer(nn.Module):
         )
         self.midi_transformer = nn.TransformerEncoder(encoder_layer, num_layers=cfg.NUM_LAYERS)
         
-        # Projection layer: 256 (Midi) -> 512 (Shared Space)
         self.midi_proj = nn.Linear(cfg.MIDI_EMBED_DIM, cfg.EMBED_DIM)
-
-        # Learnable temperature parameter
+        
         self.temperature = nn.Parameter(torch.tensor(0.07))
 
     def mean_pooling(self, model_output, attention_mask):
-        """Standard mean pooling for sentence-transformers."""
         token_embeddings = model_output.last_hidden_state
         input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
         return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
@@ -76,37 +60,31 @@ class NeuralMidiSearchTransformer(nn.Module):
         )
 
     def forward(self, input_ids, attention_mask, midi_ids):
-        """Training forward pass."""
-        # 1. Text Processing
+        # Text
         bert_out = self.bert(input_ids, attention_mask)
         t_vec = self.mean_pooling(bert_out, attention_mask)
         t_emb = F.normalize(self.text_proj(t_vec), p=2, dim=1)
 
-        # 2. MIDI Processing
+        # MIDI
         x = self.midi_emb(midi_ids) * math.sqrt(cfg.MIDI_EMBED_DIM)
         x = self.pos_encoder(x)
-        
-        # Pass through Transformer Layers
         x = self.midi_transformer(x)
         
-        # Global Average Pooling
         m_vec = torch.mean(x, dim=1)
         m_emb = F.normalize(self.midi_proj(m_vec), p=2, dim=1)
 
         return t_emb, m_emb
 
-    def encode_text(self, input_ids, attention_mask):
-        """Inference helper: Encode query text."""
-        with torch.no_grad():
-            bert_out = self.bert(input_ids, attention_mask)
-            t_vec = self.mean_pooling(bert_out, attention_mask)
-            return F.normalize(self.text_proj(t_vec), p=2, dim=1)
-
     def encode_midi(self, midi_ids):
-        """Inference helper: Encode MIDI sequence."""
         with torch.no_grad():
             x = self.midi_emb(midi_ids) * math.sqrt(cfg.MIDI_EMBED_DIM)
             x = self.pos_encoder(x)
             x = self.midi_transformer(x)
             vec = torch.mean(x, dim=1)
             return F.normalize(self.midi_proj(vec), p=2, dim=1)
+
+    def encode_text(self, input_ids, attention_mask):
+        with torch.no_grad():
+            bert_out = self.bert(input_ids, attention_mask)
+            t_vec = self.mean_pooling(bert_out, attention_mask)
+            return F.normalize(self.text_proj(t_vec), p=2, dim=1)
