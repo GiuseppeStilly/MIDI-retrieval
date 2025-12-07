@@ -3,4 +3,4 @@ __pycache__/
 *.sf2
 *.wav
 midicaps_data/
-.DS_Store
+.DS_Storeù
