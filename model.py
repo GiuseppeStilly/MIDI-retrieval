@@ -33,9 +33,10 @@ class NeuralMidiSearchTransformer(nn.Module):
         self.text_proj = nn.Linear(self.text_hidden_size, cfg.EMBED_DIM)
 
         # MIDI Encoder
-        self.midi_emb = nn.Embedding(midi_vocab_size, cfg.MIDI_EMBED_DIM)
+        # Added padding_idx=0 to ensure zero token remains zero vector
+        self.midi_emb = nn.Embedding(midi_vocab_size, cfg.MIDI_EMBED_DIM, padding_idx=0)
         
-        # Positional Encoding (uses default max_len=5000 to match checkpoint)
+        # Positional Encoding
         self.pos_encoder = PositionalEncoding(d_model=cfg.MIDI_EMBED_DIM, dropout=cfg.DROPOUT)
         
         encoder_layer = nn.TransformerEncoderLayer(
@@ -59,6 +60,14 @@ class NeuralMidiSearchTransformer(nn.Module):
             input_mask_expanded.sum(1), min=1e-9
         )
 
+    def midi_mean_pooling(self, midi_output, padding_mask):
+        # Create mask: 1 for valid tokens, 0 for padding
+        mask_expanded = (~padding_mask).unsqueeze(-1).float()
+        
+        sum_embeddings = torch.sum(midi_output * mask_expanded, 1)
+        sum_mask = torch.clamp(mask_expanded.sum(1), min=1e-9)
+        return sum_embeddings / sum_mask
+
     def forward(self, input_ids, attention_mask, midi_ids):
         # Text
         bert_out = self.bert(input_ids, attention_mask)
@@ -66,22 +75,31 @@ class NeuralMidiSearchTransformer(nn.Module):
         t_emb = F.normalize(self.text_proj(t_vec), p=2, dim=1)
 
         # MIDI
+        # Create padding mask (True where value is 0) to ignore padding in attention
+        padding_mask = (midi_ids == 0)
+        
         x = self.midi_emb(midi_ids) * math.sqrt(cfg.MIDI_EMBED_DIM)
         x = self.pos_encoder(x)
-        x = self.midi_transformer(x)
         
-        m_vec = torch.mean(x, dim=1)
+        # Pass padding_mask to transformer
+        x = self.midi_transformer(x, src_key_padding_mask=padding_mask)
+        
+        # Use masked pooling instead of simple mean
+        m_vec = self.midi_mean_pooling(x, padding_mask)
         m_emb = F.normalize(self.midi_proj(m_vec), p=2, dim=1)
 
         return t_emb, m_emb
 
     def encode_midi(self, midi_ids):
         with torch.no_grad():
+            padding_mask = (midi_ids == 0)
+            
             x = self.midi_emb(midi_ids) * math.sqrt(cfg.MIDI_EMBED_DIM)
             x = self.pos_encoder(x)
-            x = self.midi_transformer(x)
-            vec = torch.mean(x, dim=1)
-            return F.normalize(self.midi_proj(vec), p=2, dim=1)
+            x = self.midi_transformer(x, src_key_padding_mask=padding_mask)
+            
+            m_vec = self.midi_mean_pooling(x, padding_mask)
+            return F.normalize(self.midi_proj(m_vec), p=2, dim=1)
 
     def encode_text(self, input_ids, attention_mask):
         with torch.no_grad():
