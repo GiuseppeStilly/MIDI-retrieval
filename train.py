@@ -19,7 +19,6 @@ try:
 except ImportError:
     from model import NeuralMidiSearchTransformer
 
-# --- LOSS FUNCTION ---
 class InfoNCELoss(nn.Module):
     def __init__(self):
         super().__init__()
@@ -28,7 +27,6 @@ class InfoNCELoss(nn.Module):
         text_features = F.normalize(text_features, p=2, dim=1)
         midi_features = F.normalize(midi_features, p=2, dim=1)
 
-        # Matrix multiplication (Batch x Batch)
         logits = torch.matmul(text_features, midi_features.T) / temperature
         
         labels = torch.arange(logits.size(0)).to(logits.device)
@@ -38,10 +36,8 @@ class InfoNCELoss(nn.Module):
         
         return (loss_text + loss_midi) / 2.0
 
-# --- DATASET CLASS ---
 class MidiCapsDataset(Dataset):
     def __init__(self, examples=None, preloaded_data=None, midi_tok=None, text_tok=None, is_train=False):
-        # We can initialize either from a list of files (examples) or preloaded tensors
         self.examples = examples
         self.preloaded_data = preloaded_data
         self.midi_tok = midi_tok
@@ -54,25 +50,20 @@ class MidiCapsDataset(Dataset):
         return len(self.examples)
 
     def __getitem__(self, idx):
-        # Case A: Using Preloaded Augmented Data (Fastest)
         if self.preloaded_data:
             item = self.preloaded_data[idx]
             ids = item["m"].tolist() if isinstance(item["m"], torch.Tensor) else item["m"]
             
-            # If input_ids are already tokenized in cache, use them. 
-            # Otherwise we might need to re-tokenize text (rare in this setup).
             if "i" in item:
                 txt_input = item["i"]
                 txt_mask = item["a"]
             else:
-                # Fallback: re-tokenize text on the fly
                 txt = self.text_tok(item["caption"], padding="max_length", truncation=True, max_length=64, return_tensors="pt")
                 txt_input = txt["input_ids"].squeeze(0)
                 txt_mask = txt["attention_mask"].squeeze(0)
             
             path = item.get("path", "unknown")
 
-        # Case B: Loading from raw files (First run)
         else:
             ex = self.examples[idx]
             try:
@@ -86,14 +77,11 @@ class MidiCapsDataset(Dataset):
             txt_input = txt["input_ids"].squeeze(0)
             txt_mask = txt["attention_mask"].squeeze(0)
 
-        # --- RANDOM CROP (Online Augmentation) ---
-        # Perform random cropping only during training
         seq_len = len(ids)
         if self.is_train and seq_len > cfg.MAX_SEQ_LEN:
             start_idx = random.randint(0, seq_len - cfg.MAX_SEQ_LEN)
             ids = ids[start_idx : start_idx + cfg.MAX_SEQ_LEN]
         else:
-            # Standard Truncation/Padding
             if seq_len < cfg.MAX_SEQ_LEN:
                 ids = ids + [0] * (cfg.MAX_SEQ_LEN - seq_len)
             else:
@@ -109,7 +97,7 @@ class MidiCapsDataset(Dataset):
 def main():
     torch.cuda.empty_cache()
     
-    # 1. Determine which Dataset to use
+    # 1. Dataset Selection
     AUGMENTED_FILE = os.path.join(cfg.BASE_DIR, "dataset_midicaps_AUGMENTED.pt")
     NORMAL_FILE = cfg.CACHE_FILE
 
@@ -120,13 +108,13 @@ def main():
     if os.path.exists(AUGMENTED_FILE):
         print(f"Loading Augmented Dataset from {AUGMENTED_FILE}...")
         data = torch.load(AUGMENTED_FILE)
-        dataset = MidiCapsDataset(preloaded_data=data, is_train=True)
+        dataset = MidiCapsDataset(preloaded_data=data, midi_tok=midi_tok, text_tok=text_tok, is_train=True)
     elif os.path.exists(NORMAL_FILE):
         print(f"Loading Standard Dataset from {NORMAL_FILE}...")
         data = torch.load(NORMAL_FILE)
-        dataset = MidiCapsDataset(preloaded_data=data, is_train=True)
+        dataset = MidiCapsDataset(preloaded_data=data, midi_tok=midi_tok, text_tok=text_tok, is_train=True)
     else:
-        print("No cache found. Please run prepare_augmentation.py or the initial setup first.")
+        print("No cache found. Please run prepare_augmentation.py first.")
         return
 
     loader = DataLoader(
@@ -134,13 +122,13 @@ def main():
         num_workers=2, pin_memory=True
     )
 
-    # 3. Initialize Model and Loss
+    # 3. Model & Loss
     model = NeuralMidiSearchTransformer(len(midi_tok)).to(cfg.DEVICE)
     loss_fn = InfoNCELoss()
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.LEARNING_RATE, weight_decay=0.01)
 
-    # 4. Checkpoint Logic
+    # 4. Resume Logic
     start_epoch = 0
     loss_history = []
     
@@ -158,7 +146,6 @@ def main():
     print(f"\nStarting Training (V3.0) on {cfg.DEVICE}...")
     model.train()
     
-    # Scheduler
     total_steps = len(loader) * cfg.EPOCHS
     scheduler = get_linear_schedule_with_warmup(optimizer, int(0.1*total_steps), total_steps)
 
@@ -186,7 +173,6 @@ def main():
         
         print(f"Avg Loss: {epoch_loss/len(loader):.4f}")
         
-        # Save Checkpoint
         torch.save({
             "epoch": epoch,
             "model_state": model.state_dict(),
@@ -194,13 +180,23 @@ def main():
             "loss_history": loss_history
         }, cfg.SAVE_FILE)
 
-    # 6. Indexing (Final Save)
-    print("Indexing database...")
+    # 6. Indexing (Original Data Only)
+    print("Indexing database (Original data only)...")
     model.eval()
     db_embs, db_paths = [], []
     
-    # Use standard dataset for indexing (no augmentation)
-    idx_loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=False)
+    # Force load of the standard non-augmented dataset for the search index
+    if os.path.exists(NORMAL_FILE):
+        print(f"Loading standard cache from {NORMAL_FILE} for indexing.")
+        idx_data = torch.load(NORMAL_FILE)
+        # is_train=False ensures no random cropping
+        idx_dataset = MidiCapsDataset(preloaded_data=idx_data, midi_tok=midi_tok, text_tok=text_tok, is_train=False)
+    else:
+        # Fallback to current dataset if normal file missing
+        print("Warning: Standard cache not found. Indexing current loaded data.")
+        idx_dataset = dataset
+
+    idx_loader = DataLoader(idx_dataset, batch_size=cfg.BATCH_SIZE, shuffle=False)
     
     with torch.no_grad():
         for batch in tqdm(idx_loader, desc="Encoding"):
