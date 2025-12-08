@@ -1,7 +1,9 @@
 import os
 import tarfile
+import random
 from pathlib import Path
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, get_linear_schedule_with_warmup
@@ -11,135 +13,159 @@ from datasets import load_dataset
 from tqdm import tqdm
 import numpy as np
 
-# Local imports
 import config as cfg
-from model import NeuralMidiSearchTransformer
+try:
+    from model import NeuralMidiSearchTransformer
+except ImportError:
+    from model import NeuralMidiSearchTransformer
+
+# --- LOSS FUNCTION ---
+class InfoNCELoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, text_features, midi_features, temperature):
+        text_features = F.normalize(text_features, p=2, dim=1)
+        midi_features = F.normalize(midi_features, p=2, dim=1)
+
+        # Matrix multiplication (Batch x Batch)
+        logits = torch.matmul(text_features, midi_features.T) / temperature
+        
+        labels = torch.arange(logits.size(0)).to(logits.device)
+        
+        loss_text = F.cross_entropy(logits, labels)
+        loss_midi = F.cross_entropy(logits.T, labels)
+        
+        return (loss_text + loss_midi) / 2.0
 
 # --- DATASET CLASS ---
 class MidiCapsDataset(Dataset):
-    def __init__(self, examples, midi_tok, text_tok):
+    def __init__(self, examples=None, preloaded_data=None, midi_tok=None, text_tok=None, is_train=False):
+        # We can initialize either from a list of files (examples) or preloaded tensors
         self.examples = examples
+        self.preloaded_data = preloaded_data
         self.midi_tok = midi_tok
         self.text_tok = text_tok
+        self.is_train = is_train
 
     def __len__(self): 
+        if self.preloaded_data:
+            return len(self.preloaded_data)
         return len(self.examples)
 
     def __getitem__(self, idx):
-        ex = self.examples[idx]
-        
-        # Tokenize MIDI
-        try:
-            tokens = self.midi_tok(ex["path"])
-            ids = tokens.ids if hasattr(tokens, "ids") else tokens[0].ids
-        except:
-            ids = [0] 
-
-        # Manual Padding / Truncation
-        if len(ids) < cfg.MAX_SEQ_LEN:
-            ids = ids + [0] * (cfg.MAX_SEQ_LEN - len(ids))
-        else:
-            ids = ids[:cfg.MAX_SEQ_LEN]
+        # Case A: Using Preloaded Augmented Data (Fastest)
+        if self.preloaded_data:
+            item = self.preloaded_data[idx]
+            ids = item["m"].tolist() if isinstance(item["m"], torch.Tensor) else item["m"]
             
-        midi_ids = torch.tensor(ids, dtype=torch.long)
+            # If input_ids are already tokenized in cache, use them. 
+            # Otherwise we might need to re-tokenize text (rare in this setup).
+            if "i" in item:
+                txt_input = item["i"]
+                txt_mask = item["a"]
+            else:
+                # Fallback: re-tokenize text on the fly
+                txt = self.text_tok(item["caption"], padding="max_length", truncation=True, max_length=64, return_tensors="pt")
+                txt_input = txt["input_ids"].squeeze(0)
+                txt_mask = txt["attention_mask"].squeeze(0)
+            
+            path = item.get("path", "unknown")
 
-        # Tokenize Text
-        txt = self.text_tok(ex["caption"], padding="max_length", truncation=True, 
-                            max_length=64, return_tensors="pt")
-        
+        # Case B: Loading from raw files (First run)
+        else:
+            ex = self.examples[idx]
+            try:
+                tokens = self.midi_tok(ex["path"])
+                ids = tokens.ids if hasattr(tokens, "ids") else tokens[0].ids
+            except:
+                ids = [0]
+            
+            path = ex["path"]
+            txt = self.text_tok(ex["caption"], padding="max_length", truncation=True, max_length=64, return_tensors="pt")
+            txt_input = txt["input_ids"].squeeze(0)
+            txt_mask = txt["attention_mask"].squeeze(0)
+
+        # --- RANDOM CROP (Online Augmentation) ---
+        # Perform random cropping only during training
+        seq_len = len(ids)
+        if self.is_train and seq_len > cfg.MAX_SEQ_LEN:
+            start_idx = random.randint(0, seq_len - cfg.MAX_SEQ_LEN)
+            ids = ids[start_idx : start_idx + cfg.MAX_SEQ_LEN]
+        else:
+            # Standard Truncation/Padding
+            if seq_len < cfg.MAX_SEQ_LEN:
+                ids = ids + [0] * (cfg.MAX_SEQ_LEN - seq_len)
+            else:
+                ids = ids[:cfg.MAX_SEQ_LEN]
+            
         return {
-            "midi_ids": midi_ids,
-            "input_ids": txt["input_ids"].squeeze(0),
-            "attention_mask": txt["attention_mask"].squeeze(0),
-            "path": ex["path"]
+            "midi_ids": torch.tensor(ids, dtype=torch.long),
+            "input_ids": txt_input,
+            "attention_mask": txt_mask,
+            "path": path
         }
 
 def main():
     torch.cuda.empty_cache()
     
-    # 1. Data Preparation
-    print("Loading Metadata...")
-    ds = load_dataset("amaai-lab/MidiCaps", split="train")
-    train_ds = ds.filter(lambda ex: not ex["test_set"])
-    
-    # Download physical MIDI files
-    midi_root = Path(cfg.MIDI_DATA_DIR)
-    if not midi_root.exists():
-        print(" Downloading MIDI archive...")
-        path = hf_hub_download(repo_id="amaai-lab/MidiCaps", filename="midicaps.tar.gz", repo_type="dataset")
-        with tarfile.open(path) as tar: 
-            tar.extractall(midi_root)
-    
-    # Build valid example list
-    examples = []
-    for item in tqdm(train_ds, desc="Indexing files"):
-        p = midi_root / item["location"]
-        if p.exists(): 
-            examples.append({"path": str(p), "caption": item["caption"]})
+    # 1. Determine which Dataset to use
+    AUGMENTED_FILE = os.path.join(cfg.BASE_DIR, "dataset_midicaps_AUGMENTED.pt")
+    NORMAL_FILE = cfg.CACHE_FILE
 
-    # 2. Initialize Tokenizers
+    dataset = None
     midi_tok = REMI(TokenizerConfig(num_velocities=16, use_chords=True))
     text_tok = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
-    
-    dataset = MidiCapsDataset(examples, midi_tok, text_tok)
+
+    if os.path.exists(AUGMENTED_FILE):
+        print(f"Loading Augmented Dataset from {AUGMENTED_FILE}...")
+        data = torch.load(AUGMENTED_FILE)
+        dataset = MidiCapsDataset(preloaded_data=data, is_train=True)
+    elif os.path.exists(NORMAL_FILE):
+        print(f"Loading Standard Dataset from {NORMAL_FILE}...")
+        data = torch.load(NORMAL_FILE)
+        dataset = MidiCapsDataset(preloaded_data=data, is_train=True)
+    else:
+        print("No cache found. Please run prepare_augmentation.py or the initial setup first.")
+        return
+
     loader = DataLoader(
         dataset, batch_size=cfg.BATCH_SIZE, shuffle=True, 
         num_workers=2, pin_memory=True
     )
 
-    # 3. Initialize Model
+    # 3. Initialize Model and Loss
     model = NeuralMidiSearchTransformer(len(midi_tok)).to(cfg.DEVICE)
+    loss_fn = InfoNCELoss()
+    
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.LEARNING_RATE, weight_decay=0.01)
 
-    # 4. Checkpoint & Resume Logic
+    # 4. Checkpoint Logic
     start_epoch = 0
     loss_history = []
     
     if os.path.exists(cfg.SAVE_FILE):
-        print(f"Found checkpoint: {cfg.SAVE_FILE}")
+        print(f"Resuming from checkpoint: {cfg.SAVE_FILE}")
         try:
             checkpoint = torch.load(cfg.SAVE_FILE, map_location=cfg.DEVICE, weights_only=False)
-            
-            # Check for collapsed model
-            should_restart = False
-            if 'loss_history' in checkpoint and len(checkpoint['loss_history']) > 0:
-                if checkpoint['loss_history'][-1] > 4.0:
-                    should_restart = True
-            
-            if should_restart:
-                print(" Detected collapsed model (High Loss). Restarting from scratch.")
-                start_epoch = 0
-                loss_history = []
-            else:
-                model.load_state_dict(checkpoint['model_state'])
-                if 'epoch' in checkpoint:
-                    start_epoch = checkpoint['epoch'] + 1
-                if 'loss_history' in checkpoint:
-                    loss_history = checkpoint['loss_history']
-                print(f" Resuming from Epoch {start_epoch + 1}...")
-
+            model.load_state_dict(checkpoint['model_state'])
+            if 'epoch' in checkpoint: start_epoch = checkpoint['epoch'] + 1
+            if 'loss_history' in checkpoint: loss_history = checkpoint['loss_history']
         except Exception as e:
-            print(f"Error loading checkpoint: {e}. Starting from scratch.")
+            print(f"Checkpoint error: {e}. Starting fresh.")
 
-    # 5. Setup Scheduler
-    total_steps = len(loader) * cfg.EPOCHS
-    warmup_steps = int(0.1 * total_steps)
-    scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
-
-    # Skip steps if resuming
-    if start_epoch > 0:
-        steps_to_skip = start_epoch * len(loader)
-        for _ in range(steps_to_skip):
-            scheduler.step()
-
-    # 6. Training Loop
-    print(f"\n Starting Stabilized Training on {cfg.DEVICE}...")
+    # 5. Training Loop
+    print(f"\nStarting Training (V3.0) on {cfg.DEVICE}...")
     model.train()
     
+    # Scheduler
+    total_steps = len(loader) * cfg.EPOCHS
+    scheduler = get_linear_schedule_with_warmup(optimizer, int(0.1*total_steps), total_steps)
+
     for epoch in range(start_epoch, cfg.EPOCHS):
         loop = tqdm(loader, desc=f"Epoch {epoch+1}/{cfg.EPOCHS}")
-        
         epoch_loss = 0
+        
         for batch in loop:
             optimizer.zero_grad()
             i_ids = batch["input_ids"].to(cfg.DEVICE)
@@ -147,17 +173,10 @@ def main():
             m_ids = batch["midi_ids"].to(cfg.DEVICE)
 
             t_emb, m_emb = model(i_ids, mask, m_ids)
-            
-            # Contrastive Loss
-            logits = (t_emb @ m_emb.T) / model.temperature
-            labels = torch.arange(logits.shape[0]).to(cfg.DEVICE)
-            loss = (F.cross_entropy(logits, labels) + F.cross_entropy(logits.T, labels)) / 2.0
+            loss = loss_fn(t_emb, m_emb, model.temperature)
             
             loss.backward()
-            
-            # --- STABILITY: Gradient Clipping ---
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            
             optimizer.step()
             scheduler.step()
             
@@ -165,7 +184,7 @@ def main():
             epoch_loss += loss.item()
             loop.set_postfix(loss=loss.item())
         
-        print(f"Epoch {epoch+1} Avg Loss: {epoch_loss/len(loader):.4f}")
+        print(f"Avg Loss: {epoch_loss/len(loader):.4f}")
         
         # Save Checkpoint
         torch.save({
@@ -175,20 +194,22 @@ def main():
             "loss_history": loss_history
         }, cfg.SAVE_FILE)
 
-    # 7. Final Indexing
-    print("Creating Search Index...")
+    # 6. Indexing (Final Save)
+    print("Indexing database...")
     model.eval()
     db_embs, db_paths = [], []
-    idx_loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=False, num_workers=2)
+    
+    # Use standard dataset for indexing (no augmentation)
+    idx_loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=False)
     
     with torch.no_grad():
-        for batch in tqdm(idx_loader, desc="Encoding DB"):
+        for batch in tqdm(idx_loader, desc="Encoding"):
             m_ids = batch["midi_ids"].to(cfg.DEVICE)
             embs = model.encode_midi(m_ids)
             db_embs.append(embs.cpu().numpy())
-            db_paths.extend(batch["path"])
+            if "path" in batch:
+                db_paths.extend(batch["path"])
             
-    # Save Final Model with Index
     torch.save({
         "epoch": cfg.EPOCHS,
         "model_state": model.state_dict(),
@@ -198,7 +219,7 @@ def main():
         "loss_history": loss_history
     }, cfg.SAVE_FILE)
     
-    print(f" Training Complete! Saved to {cfg.SAVE_FILE}")
+    print(f"Done! Saved to {cfg.SAVE_FILE}")
 
 if __name__ == "__main__":
     main()
