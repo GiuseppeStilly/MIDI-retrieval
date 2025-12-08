@@ -128,6 +128,10 @@ def main():
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.LEARNING_RATE, weight_decay=0.01)
 
+    # --- OOM FIX: Mixed Precision Scaler ---
+    scaler = torch.cuda.amp.GradScaler()
+    print("🚀 Mixed Precision (AMP) Enabled to save memory.")
+
     # 4. Resume Logic
     start_epoch = 0
     loss_history = []
@@ -143,7 +147,7 @@ def main():
             print(f"Checkpoint error: {e}. Starting fresh.")
 
     # 5. Training Loop
-    print(f"\nStarting Training (V3.0) on {cfg.DEVICE}...")
+    print(f"\nStarting Training (V3.0 + AMP) on {cfg.DEVICE}...")
     model.train()
     
     total_steps = len(loader) * cfg.EPOCHS
@@ -159,12 +163,23 @@ def main():
             mask = batch["attention_mask"].to(cfg.DEVICE)
             m_ids = batch["midi_ids"].to(cfg.DEVICE)
 
-            t_emb, m_emb = model(i_ids, mask, m_ids)
-            loss = loss_fn(t_emb, m_emb, model.temperature)
+            # --- MIXED PRECISION CONTEXT ---
+            # Calculates tensors in float16 to save memory
+            with torch.cuda.amp.autocast():
+                t_emb, m_emb = model(i_ids, mask, m_ids)
+                loss = loss_fn(t_emb, m_emb, model.temperature)
             
-            loss.backward()
+            # Scale Loss & Backward
+            scaler.scale(loss).backward()
+            
+            # Unscale before clipping
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            
+            # Step & Update Scaler
+            scaler.step(optimizer)
+            scaler.update()
+            
             scheduler.step()
             
             loss_history.append(loss.item())
@@ -185,14 +200,11 @@ def main():
     model.eval()
     db_embs, db_paths = [], []
     
-    # Force load of the standard non-augmented dataset for the search index
     if os.path.exists(NORMAL_FILE):
         print(f"Loading standard cache from {NORMAL_FILE} for indexing.")
         idx_data = torch.load(NORMAL_FILE)
-        # is_train=False ensures no random cropping
         idx_dataset = MidiCapsDataset(preloaded_data=idx_data, midi_tok=midi_tok, text_tok=text_tok, is_train=False)
     else:
-        # Fallback to current dataset if normal file missing
         print("Warning: Standard cache not found. Indexing current loaded data.")
         idx_dataset = dataset
 
@@ -201,8 +213,10 @@ def main():
     with torch.no_grad():
         for batch in tqdm(idx_loader, desc="Encoding"):
             m_ids = batch["midi_ids"].to(cfg.DEVICE)
-            embs = model.encode_midi(m_ids)
-            db_embs.append(embs.cpu().numpy())
+            # Mixed precision also helps during inference/indexing
+            with torch.cuda.amp.autocast():
+                embs = model.encode_midi(m_ids)
+            db_embs.append(embs.float().cpu().numpy()) # Convert back to float32 for storage
             if "path" in batch:
                 db_paths.extend(batch["path"])
             
