@@ -40,7 +40,7 @@ DROPOUT = 0.1
 MAX_SEQ_LEN = 1024        
 
 # --- TRAINING HYPERPARAMETERS ---
-BATCH_SIZE = 256 # Adjust based on GPU memory
+BATCH_SIZE = 128 # Adjust based on GPU memory
 LEARNING_RATE = 1e-4     
 EPOCHS = 25
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
