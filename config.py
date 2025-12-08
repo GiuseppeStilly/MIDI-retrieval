@@ -32,17 +32,17 @@ MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
 EMBED_DIM = 512          
 
 # Transformer Architecture
-MIDI_EMBED_DIM = 256     
-NUM_LAYERS = 4           
-NUM_HEADS = 4            
-FF_DIM = 1024            
+MIDI_EMBED_DIM = 512     
+NUM_LAYERS = 6           
+NUM_HEADS = 8            
+FF_DIM = 2048            
 DROPOUT = 0.1            
-MAX_SEQ_LEN = 512        
+MAX_SEQ_LEN = 1024        
 
 # --- TRAINING HYPERPARAMETERS ---
-BATCH_SIZE = 64
-LEARNING_RATE = 5e-5     
-EPOCHS = 20
+BATCH_SIZE = 256 # Adjust based on GPU memory
+LEARNING_RATE = 1e-4     
+EPOCHS = 25
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 print(f"Config loaded. Device: {DEVICE}")
