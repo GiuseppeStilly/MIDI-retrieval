@@ -114,7 +114,7 @@ def main():
         data = torch.load(NORMAL_FILE)
         dataset = MidiCapsDataset(preloaded_data=data, midi_tok=midi_tok, text_tok=text_tok, is_train=True)
     else:
-        print("No cache found. Please run prepare_augmentation.py first.")
+        print("No cache found. Please run data_augmentation.py first.")
         return
 
     loader = DataLoader(
@@ -130,7 +130,7 @@ def main():
 
     # --- OOM FIX: Mixed Precision Scaler ---
     scaler = torch.cuda.amp.GradScaler()
-    print("🚀 Mixed Precision (AMP) Enabled to save memory.")
+    print(" Mixed Precision (AMP) Enabled to save memory.")
 
     # 4. Resume Logic
     start_epoch = 0

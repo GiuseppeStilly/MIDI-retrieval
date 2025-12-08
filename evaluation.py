@@ -70,8 +70,13 @@ def official_test():
             mask = batch["attention_mask"].to(DEVICE)
             m_ids = batch["midi_ids"].to(DEVICE)
 
-            text_embs.append(model.encode_text(i_ids, mask))
-            midi_embs.append(model.encode_midi(m_ids))
+            # Mixed Precision (AMP) per velocità e memoria
+            with torch.cuda.amp.autocast():
+                t_out = model.encode_text(i_ids, mask)
+                m_out = model.encode_midi(m_ids)
+
+            text_embs.append(t_out.float().cpu())
+            midi_embs.append(m_out.float().cpu())
 
     text_tensor = torch.cat(text_embs)
     midi_tensor = torch.cat(midi_embs)
@@ -79,7 +84,7 @@ def official_test():
     # Calculate Similarity Matrix
     print("Calculating Ranking...")
     sim_matrix = text_tensor @ midi_tensor.T
-    sim_matrix = sim_matrix.cpu().float()
+    sim_matrix = sim_matrix.float()
     
     ranks = []
     n = sim_matrix.shape[0]
