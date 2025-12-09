@@ -31,10 +31,13 @@ class InfoNCELoss(nn.Module):
         midi_features_1 = F.normalize(midi_features_1, p=2, dim=1)
         midi_features_2 = F.normalize(midi_features_2, p=2, dim=1)
         
+        # Cosine similarity matrix
         logits = torch.matmul(midi_features_1, midi_features_2.T) / self.temperature
         
+        # Labels are diagonal (positive pairs)
         labels = torch.arange(logits.size(0)).to(logits.device)
         
+        # Standard contrastive loss
         loss = F.cross_entropy(logits, labels)
         return loss
 
@@ -49,69 +52,25 @@ class MarginRankingLoss(nn.Module):
         Margin ranking: positive pairs should have high similarity,
         negative pairs should have lower similarity.
         """
+        # Similarity matrix
         sim_matrix = torch.matmul(text_features, midi_features.T)
         
+        # Diagonal = positive pairs
         pos_sim = torch.diag(sim_matrix)
         
+        # Off-diagonal = negative pairs
         batch_size = sim_matrix.size(0)
         
+        # For each positive, compute loss against all negatives
         loss = 0.0
         for i in range(batch_size):
+            # Negatives are all but the diagonal
             neg_sims = torch.cat([sim_matrix[i, :i], sim_matrix[i, i+1:]])
             
+            # Margin loss: max(0, margin - (pos - neg))
             loss += torch.sum(torch.clamp(self.margin - (pos_sim[i] - neg_sims), min=0.0))
         
         return loss / batch_size
-
-class MidiContrastivePairDataset(Dataset):
-    """Dataset that returns explicit (original, shifted) pairs for contrastive learning."""
-    
-    def __init__(self, augmented_data_list, midi_tok=None, text_tok=None):
-        self.data = augmented_data_list
-        self.pairs = self._create_pairs()
-        self.midi_tok = midi_tok
-        self.text_tok = text_tok
-
-    def _create_pairs(self):
-        """
-        Create pairs (original, shifted) from flat list structure.
-        Structure: [SongA, SongA_s1, SongA_s2, SongA_s3, SongA_s4, SongB, ...]
-        Group size: 5 (1 original + 4 shifts from PITCH_SHIFTS = [-3, -1, 1, 3])
-        """
-        pairs = []
-        group_size = 5
-        
-        for i in range(0, len(self.data), group_size):
-            if i + group_size <= len(self.data):
-                orig_idx = i
-                for shift_idx in range(i + 1, i + group_size):
-                    pairs.append((orig_idx, shift_idx))
-        
-        return pairs
-
-    def __len__(self):
-        return len(self.pairs)
-
-    def __getitem__(self, idx):
-        orig_idx, shift_idx = self.pairs[idx]
-        
-        orig_item = self.data[orig_idx]
-        shift_item = self.data[shift_idx]
-        
-        orig_ids = orig_item["m"].tolist() if isinstance(orig_item["m"], torch.Tensor) else orig_item["m"]
-        shift_ids = shift_item["m"].tolist() if isinstance(shift_item["m"], torch.Tensor) else shift_item["m"]
-        
-        def pad_seq(ids):
-            if len(ids) < cfg.MAX_SEQ_LEN:
-                ids = ids + [0] * (cfg.MAX_SEQ_LEN - len(ids))
-            else:
-                ids = ids[:cfg.MAX_SEQ_LEN]
-            return torch.tensor(ids, dtype=torch.long)
-        
-        return {
-            "midi_ids_orig": pad_seq(orig_ids),
-            "midi_ids_shift": pad_seq(shift_ids)
-        }
 
 class MidiCapsDataset(Dataset):
     def __init__(self, examples=None, preloaded_data=None, midi_tok=None, text_tok=None, is_train=False):
@@ -155,6 +114,7 @@ class MidiCapsDataset(Dataset):
 
         seq_len = len(ids)
         
+        # Handle sequence length
         if self.is_train and seq_len > cfg.MAX_SEQ_LEN:
             start_idx = np.random.randint(0, seq_len - cfg.MAX_SEQ_LEN)
             ids = ids[start_idx : start_idx + cfg.MAX_SEQ_LEN]
@@ -174,7 +134,7 @@ class MidiCapsDataset(Dataset):
 def phase_1_pretraining(model, train_loader, optimizer, scheduler, scaler):
     """
     PHASE 1: MIDI-only contrastive pretraining with pitch shifts.
-    DataLoader provides explicit (original, shifted) pairs.
+    Model learns robust MIDI embeddings invariant to pitch shifts.
     """
     print("\n" + "="*60)
     print("PHASE 1: MIDI-Only Contrastive Pretraining")
@@ -188,17 +148,31 @@ def phase_1_pretraining(model, train_loader, optimizer, scheduler, scaler):
         epoch_loss = 0
         
         for batch in loop:
-            m_ids_orig = batch["midi_ids_orig"].to(cfg.DEVICE)
-            m_ids_shift = batch["midi_ids_shift"].to(cfg.DEVICE)
+            # In Phase 1, we load augmented data with pitch shifts
+            # batch["midi_ids"] contains pairs: [original, shifted_1, ..., shifted_n]
+            m_ids = batch["midi_ids"].to(cfg.DEVICE)
+            
+            # Split batch into consecutive pairs
+            batch_size = m_ids.size(0)
+            
+            # For simplicity: take pairs (i, i+1) where i is even
+            # In real scenario, you'd load pre-paired data or implement within-batch pairing
+            with torch.cuda.amp.autocast():
+                # Encode all MIDI sequences
+                midi_embeddings = model.encode_midi(m_ids)
+                
+                # Compute loss on consecutive pairs
+                loss = 0.0
+                pair_count = 0
+                for i in range(0, batch_size - 1, 2):
+                    pair_loss = loss_fn(midi_embeddings[i:i+1], midi_embeddings[i+1:i+2])
+                    loss += pair_loss
+                    pair_count += 1
+                
+                if pair_count > 0:
+                    loss = loss / pair_count
             
             optimizer.zero_grad()
-            
-            with torch.cuda.amp.autocast():
-                emb_orig = model.encode_midi(m_ids_orig)
-                emb_shift = model.encode_midi(m_ids_shift)
-                
-                loss = loss_fn(emb_orig, emb_shift)
-            
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -252,6 +226,7 @@ def phase_2_finetuning(model, train_loader, optimizer, scheduler, scaler):
         
         print(f"Phase2 Epoch {epoch+1} Avg Loss: {epoch_loss/len(train_loader):.4f}")
         
+        # Save checkpoint
         torch.save({
             "epoch": epoch,
             "model_state": model.state_dict(),
@@ -263,12 +238,14 @@ def phase_2_finetuning(model, train_loader, optimizer, scheduler, scaler):
 def main():
     torch.cuda.empty_cache()
     
+    # Determine dataset to use
     AUGMENTED_FILE = os.path.join(cfg.BASE_DIR, "dataset_midicaps_MIDI_PRETRAINING.pt")
     NORMAL_FILE = cfg.CACHE_FILE
     
     midi_tok = REMI(TokenizerConfig(num_velocities=16, use_chords=True))
     text_tok = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
     
+    # Model
     model = NeuralMidiSearchTransformer(len(midi_tok)).to(cfg.DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.LEARNING_RATE, weight_decay=0.01)
     scaler = torch.cuda.amp.GradScaler()
@@ -276,17 +253,12 @@ def main():
     print(f"Config: NUM_LAYERS={cfg.NUM_LAYERS}, EMBED_DIM={cfg.EMBED_DIM}, BATCH_SIZE={cfg.BATCH_SIZE}")
     print(f"Mixed Precision (AMP) Enabled.")
     
+    # PHASE 1: Contrastive Pretraining (if enabled)
     if cfg.USE_CONTRASTIVE_PRETRAINING:
         if os.path.exists(AUGMENTED_FILE):
             print(f"\nLoading augmented dataset from {AUGMENTED_FILE} for Phase 1...")
             data = torch.load(AUGMENTED_FILE)
-            
-            if isinstance(data, dict):
-                augmented_data = data["data"]
-            else:
-                augmented_data = data
-            
-            dataset = MidiContrastivePairDataset(augmented_data, midi_tok=midi_tok, text_tok=text_tok)
+            dataset = MidiCapsDataset(preloaded_data=data, midi_tok=midi_tok, text_tok=text_tok, is_train=True)
         else:
             print(f"Augmented file not found. Skipping Phase 1.")
             cfg.USE_CONTRASTIVE_PRETRAINING = False
@@ -298,6 +270,7 @@ def main():
             
             phase_1_pretraining(model, loader, optimizer, scheduler, scaler)
     
+    # PHASE 2: Supervised Fine-tuning
     if os.path.exists(NORMAL_FILE):
         print(f"\nLoading standard dataset from {NORMAL_FILE} for Phase 2...")
         data = torch.load(NORMAL_FILE)
@@ -312,6 +285,7 @@ def main():
     
     phase_2_finetuning(model, loader, optimizer, scheduler, scaler)
     
+    # Final Indexing
     print("\nIndexing database...")
     model.eval()
     db_embs, db_paths = [], []
