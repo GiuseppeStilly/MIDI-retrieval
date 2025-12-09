@@ -88,18 +88,18 @@ class NeuralMidiSearchTransformer(nn.Module):
         return t_emb, m_emb
 
     def encode_midi(self, midi_ids):
-        """Encode MIDI to embedding (no_grad)."""
-        with torch.no_grad():
-            padding_mask = (midi_ids == 0)
-            x = self.midi_emb(midi_ids) * math.sqrt(cfg.MIDI_EMBED_DIM)
-            x = self.pos_encoder(x)
-            x = self.midi_transformer(x, src_key_padding_mask=padding_mask)
-            m_vec = self.midi_mean_pooling(x, padding_mask)
-            return F.normalize(self.midi_proj(m_vec), p=2, dim=1)
+        """Encode MIDI to embedding."""
+        # RIMOSSO torch.no_grad() PERCHE' SERVE NEL TRAINING FASE 1
+        padding_mask = (midi_ids == 0)
+        x = self.midi_emb(midi_ids) * math.sqrt(cfg.MIDI_EMBED_DIM)
+        x = self.pos_encoder(x)
+        x = self.midi_transformer(x, src_key_padding_mask=padding_mask)
+        m_vec = self.midi_mean_pooling(x, padding_mask)
+        return F.normalize(self.midi_proj(m_vec), p=2, dim=1)
 
     def encode_text(self, input_ids, attention_mask):
-        """Encode text to embedding (no_grad)."""
-        with torch.no_grad():
-            bert_out = self.bert(input_ids, attention_mask)
-            t_vec = self.mean_pooling(bert_out, attention_mask)
-            return F.normalize(self.text_proj(t_vec), p=2, dim=1)
+        """Encode text to embedding."""
+        # RIMOSSO torch.no_grad()
+        bert_out = self.bert(input_ids, attention_mask)
+        t_vec = self.mean_pooling(bert_out, attention_mask)
+        return F.normalize(self.text_proj(t_vec), p=2, dim=1)
