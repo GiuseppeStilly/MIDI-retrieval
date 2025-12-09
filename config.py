@@ -15,7 +15,7 @@ else:
 
 # --- FILE PATHS ---
 # Saved as V3 to serve as the new official baseline
-SAVE_FILE = os.path.join(BASE_DIR, "midi_search_V3.pt")
+SAVE_FILE = os.path.join(BASE_DIR, "midi_search_V3.pt") # model checkpoint
 CACHE_FILE = os.path.join(BASE_DIR, "dataset_midicaps_tokenized.pt")
 
 # --- MODEL HYPERPARAMETERS (Optimized Student Architecture) ---
