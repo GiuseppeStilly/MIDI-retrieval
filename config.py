@@ -26,4 +26,4 @@ LEARNING_RATE = 1e-4
 EPOCHS = 2
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-print(f"⚙️ Config loaded. Device: {DEVICE}")
+print(f" Config loaded. Device: {DEVICE}")
