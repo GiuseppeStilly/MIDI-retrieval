@@ -14,229 +14,123 @@ try:
 except ImportError:
     from model import NeuralMidiSearchTransformer
 
-# --- LOSS FUNCTIONS ---
-
-class InfoNCELoss(nn.Module):
-    """Contrastive loss for MIDI-only pretraining (PHASE 1)."""
-    def __init__(self, temperature=0.05):
-        super().__init__()
-        self.temperature = temperature
-
-    def forward(self, midi_features_1, midi_features_2):
-        """
-        Contrastive loss between two MIDI embeddings (original vs shifted).
-        midi_features_1: shape [batch_size, embed_dim]
-        midi_features_2: shape [batch_size, embed_dim]
-        """
-        midi_features_1 = F.normalize(midi_features_1, p=2, dim=1)
-        midi_features_2 = F.normalize(midi_features_2, p=2, dim=1)
-        
-        logits = torch.matmul(midi_features_1, midi_features_2.T) / self.temperature
-        
-        labels = torch.arange(logits.size(0)).to(logits.device)
-        
-        loss = F.cross_entropy(logits, labels)
-        return loss
+# --- LOSS FUNCTION ---
 
 class MarginRankingLoss(nn.Module):
-    """Margin ranking loss for text-to-MIDI retrieval (PHASE 2)."""
+    """
+    Main Loss for Text-to-MIDI Retrieval.
+    Objective: Sim(Text, CorrectMusic) > Sim(Text, WrongMusic) + Margin
+    """
     def __init__(self, margin=0.3):
         super().__init__()
         self.margin = margin
 
     def forward(self, text_features, midi_features):
         """
-        Margin ranking: positive pairs should have high similarity,
-        negative pairs should have lower similarity.
+        Computes ranking loss.
+        text_features: [batch_size, embed_dim]
+        midi_features: [batch_size, embed_dim]
         """
+        # Compute similarity matrix [Batch x Batch]
         sim_matrix = torch.matmul(text_features, midi_features.T)
         
+        # Diagonal contains the correct pairs (Positives)
         pos_sim = torch.diag(sim_matrix)
         
         batch_size = sim_matrix.size(0)
-        
         loss = 0.0
+        
         for i in range(batch_size):
+            # For each item, take all similarities EXCEPT the correct one (Negatives)
+            # sim_matrix[i] is the i-th row. We remove the i-th element.
             neg_sims = torch.cat([sim_matrix[i, :i], sim_matrix[i, i+1:]])
             
+            # Loss = max(0, margin - (Positive - Negative))
+            # We want Positive similarity to be higher than Negative by at least 'margin'
             loss += torch.sum(torch.clamp(self.margin - (pos_sim[i] - neg_sims), min=0.0))
         
+        # Average over batch
         return loss / batch_size
 
-class MidiContrastivePairDataset(Dataset):
-    """Dataset that returns explicit (original, shifted) pairs for contrastive learning."""
-    
-    def __init__(self, augmented_data_list, midi_tok=None, text_tok=None):
-        self.data = augmented_data_list
-        self.pairs = self._create_pairs()
-        self.midi_tok = midi_tok
-        self.text_tok = text_tok
-
-    def _create_pairs(self):
-        """
-        Create pairs (original, shifted) from flat list structure.
-        Structure: [SongA, SongA_s1, SongA_s2, SongA_s3, SongA_s4, SongB, ...]
-        Group size: 5 (1 original + 4 shifts from PITCH_SHIFTS = [-3, -1, 1, 3])
-        """
-        pairs = []
-        group_size = 5
-        
-        for i in range(0, len(self.data), group_size):
-            if i + group_size <= len(self.data):
-                orig_idx = i
-                for shift_idx in range(i + 1, i + group_size):
-                    pairs.append((orig_idx, shift_idx))
-        
-        return pairs
-
-    def __len__(self):
-        return len(self.pairs)
-
-    def __getitem__(self, idx):
-        orig_idx, shift_idx = self.pairs[idx]
-        
-        orig_item = self.data[orig_idx]
-        shift_item = self.data[shift_idx]
-        
-        orig_ids = orig_item["m"].tolist() if isinstance(orig_item["m"], torch.Tensor) else orig_item["m"]
-        shift_ids = shift_item["m"].tolist() if isinstance(shift_item["m"], torch.Tensor) else shift_item["m"]
-        
-        def pad_seq(ids):
-            if len(ids) < cfg.MAX_SEQ_LEN:
-                ids = ids + [0] * (cfg.MAX_SEQ_LEN - len(ids))
-            else:
-                ids = ids[:cfg.MAX_SEQ_LEN]
-            return torch.tensor(ids, dtype=torch.long)
-        
-        return {
-            "midi_ids_orig": pad_seq(orig_ids),
-            "midi_ids_shift": pad_seq(shift_ids)
-        }
+# --- DATASET ---
 
 class MidiCapsDataset(Dataset):
-    def __init__(self, examples=None, preloaded_data=None, midi_tok=None, text_tok=None, is_train=False):
-        self.examples = examples
-        self.preloaded_data = preloaded_data
+    """
+    Standard Dataset: Loads (Caption, MIDI) pairs.
+    Includes Random Crop for Data Augmentation to prevent overfitting.
+    """
+    def __init__(self, preloaded_data, midi_tok, text_tok, is_train=False):
+        self.data = preloaded_data
         self.midi_tok = midi_tok
         self.text_tok = text_tok
         self.is_train = is_train
 
     def __len__(self):
-        if self.preloaded_data:
-            return len(self.preloaded_data)
-        return len(self.examples)
+        return len(self.data)
 
     def __getitem__(self, idx):
-        if self.preloaded_data:
-            item = self.preloaded_data[idx]
-            ids = item["m"].tolist() if isinstance(item["m"], torch.Tensor) else item["m"]
-            
-            if "i" in item:
-                txt_input = item["i"]
-                txt_mask = item["a"]
-            else:
-                txt = self.text_tok(item["caption"], padding="max_length", truncation=True, max_length=64, return_tensors="pt")
-                txt_input = txt["input_ids"].squeeze(0)
-                txt_mask = txt["attention_mask"].squeeze(0)
-            
-            path = item.get("path", "unknown")
-        else:
-            ex = self.examples[idx]
-            try:
-                tokens = self.midi_tok(ex["path"])
-                ids = tokens.ids if hasattr(tokens, "ids") else tokens[0].ids
-            except:
-                ids = [0]
-            
-            path = ex["path"]
-            txt = self.text_tok(ex["caption"], padding="max_length", truncation=True, max_length=64, return_tensors="pt")
-            txt_input = txt["input_ids"].squeeze(0)
-            txt_mask = txt["attention_mask"].squeeze(0)
-
-        seq_len = len(ids)
+        item = self.data[idx]
         
+        # 1. MIDI Handling
+        ids = item["m"].tolist() if isinstance(item["m"], torch.Tensor) else item["m"]
+        
+        # Random Crop (Essential Data Augmentation)
+        seq_len = len(ids)
         if self.is_train and seq_len > cfg.MAX_SEQ_LEN:
+            # Pick a random segment of the song (not always the start)
             start_idx = np.random.randint(0, seq_len - cfg.MAX_SEQ_LEN)
             ids = ids[start_idx : start_idx + cfg.MAX_SEQ_LEN]
         else:
+            # Padding or standard truncation
             if seq_len < cfg.MAX_SEQ_LEN:
                 ids = ids + [0] * (cfg.MAX_SEQ_LEN - seq_len)
             else:
                 ids = ids[:cfg.MAX_SEQ_LEN]
 
+        # 2. Text Handling
+        if "i" in item:
+            # If already tokenized in cache file
+            txt_input = item["i"]
+            txt_mask = item["a"]
+        else:
+            # On-the-fly tokenization (fallback)
+            txt = self.text_tok(item["caption"], padding="max_length", truncation=True, max_length=64, return_tensors="pt")
+            txt_input = txt["input_ids"].squeeze(0)
+            txt_mask = txt["attention_mask"].squeeze(0)
+            
         return {
             "midi_ids": torch.tensor(ids, dtype=torch.long),
             "input_ids": txt_input,
             "attention_mask": txt_mask,
-            "path": path
+            "path": item.get("path", "unknown")
         }
 
-def phase_1_pretraining(model, train_loader, optimizer, scheduler, scaler):
-    """
-    PHASE 1: MIDI-only contrastive pretraining with pitch shifts.
-    DataLoader provides explicit (original, shifted) pairs.
-    """
-    print("\n" + "="*60)
-    print("PHASE 1: MIDI-Only Contrastive Pretraining")
-    print("="*60)
-    
-    loss_fn = InfoNCELoss(temperature=cfg.CONTRASTIVE_TEMPERATURE)
-    model.train()
-    
-    for epoch in range(cfg.CONTRASTIVE_EPOCHS):
-        loop = tqdm(train_loader, desc=f"Phase1-Epoch {epoch+1}/{cfg.CONTRASTIVE_EPOCHS}")
-        epoch_loss = 0
-        
-        for batch in loop:
-            m_ids_orig = batch["midi_ids_orig"].to(cfg.DEVICE)
-            m_ids_shift = batch["midi_ids_shift"].to(cfg.DEVICE)
-            
-            optimizer.zero_grad()
-            
-            with torch.cuda.amp.autocast():
-                emb_orig = model.encode_midi(m_ids_orig)
-                emb_shift = model.encode_midi(m_ids_shift)
-                
-                loss = loss_fn(emb_orig, emb_shift)
-            
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            scaler.step(optimizer)
-            scaler.update()
-            scheduler.step()
-            
-            epoch_loss += loss.item()
-            loop.set_postfix(loss=loss.item())
-        
-        print(f"Phase1 Epoch {epoch+1} Avg Loss: {epoch_loss/len(train_loader):.4f}")
-    
-    print("Phase 1 Complete. MIDI encoder is now robust to pitch shifts.\n")
+# --- TRAINING LOOP ---
 
-def phase_2_finetuning(model, train_loader, optimizer, scheduler, scaler):
-    """
-    PHASE 2: Text-to-MIDI fine-tuning on original (non-augmented) data.
-    Model learns to align text captions with MIDI representations.
-    """
+def train_text_to_midi(model, train_loader, optimizer, scheduler, scaler):
     print("\n" + "="*60)
-    print("PHASE 2: Text-to-MIDI Fine-tuning")
+    print("📝 STARTING TRAINING: Text-to-MIDI Alignment")
     print("="*60)
     
     loss_fn = MarginRankingLoss(margin=cfg.MARGIN)
     model.train()
     
-    for epoch in range(cfg.SUPERVISED_EPOCHS):
-        loop = tqdm(train_loader, desc=f"Phase2-Epoch {epoch+1}/{cfg.SUPERVISED_EPOCHS}")
+    total_epochs = cfg.EPOCHS 
+    
+    for epoch in range(total_epochs):
+        loop = tqdm(train_loader, desc=f"Epoch {epoch+1}/{total_epochs}")
         epoch_loss = 0
         
         for batch in loop:
+            # Move data to GPU
             i_ids = batch["input_ids"].to(cfg.DEVICE)
             mask = batch["attention_mask"].to(cfg.DEVICE)
             m_ids = batch["midi_ids"].to(cfg.DEVICE)
             
             optimizer.zero_grad()
             
-            with torch.cuda.amp.autocast():
+            # Mixed Precision Training
+            with torch.amp.autocast('cuda'):
                 t_emb, m_emb = model(i_ids, mask, m_ids)
                 loss = loss_fn(t_emb, m_emb)
             
@@ -250,81 +144,67 @@ def phase_2_finetuning(model, train_loader, optimizer, scheduler, scaler):
             epoch_loss += loss.item()
             loop.set_postfix(loss=loss.item())
         
-        print(f"Phase2 Epoch {epoch+1} Avg Loss: {epoch_loss/len(train_loader):.4f}")
+        # Log End of Epoch
+        avg_loss = epoch_loss / len(train_loader)
+        print(f"Epoch {epoch+1} Avg Loss: {avg_loss:.4f}")
         
+        # Save Checkpoint
         torch.save({
             "epoch": epoch,
             "model_state": model.state_dict(),
-            "phase": 2,
+            "config": "V4.0_Student_Direct",
+            "loss": avg_loss
         }, cfg.SAVE_FILE)
-    
-    print("Phase 2 Complete. Text-MIDI alignment optimized.\n")
 
 def main():
     torch.cuda.empty_cache()
     
-    AUGMENTED_FILE = os.path.join(cfg.BASE_DIR, "dataset_midicaps_MIDI_PRETRAINING.pt")
-    NORMAL_FILE = cfg.CACHE_FILE
+    # 1. Load Data
+    DATA_FILE = cfg.CACHE_FILE
+    if not os.path.exists(DATA_FILE):
+        print(f"Dataset file not found at {DATA_FILE}!")
+        return
+        
+    print(f"📂 Loading dataset from {DATA_FILE}...")
+    data = torch.load(DATA_FILE)
     
+    # 2. Initialize Tokenizers
     midi_tok = REMI(TokenizerConfig(num_velocities=16, use_chords=True))
     text_tok = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
     
+    # 3. Initialize Model
+    print(f"Initializing V4.0 Model (Layers={cfg.NUM_LAYERS}, Dim={cfg.EMBED_DIM})...")
     model = NeuralMidiSearchTransformer(len(midi_tok)).to(cfg.DEVICE)
+    
+    # 4. Optimizer & Scaler
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.LEARNING_RATE, weight_decay=0.01)
     scaler = torch.cuda.amp.GradScaler()
     
-    print(f"Config: NUM_LAYERS={cfg.NUM_LAYERS}, EMBED_DIM={cfg.EMBED_DIM}, BATCH_SIZE={cfg.BATCH_SIZE}")
-    print(f"Mixed Precision (AMP) Enabled.")
-    
-    if cfg.USE_CONTRASTIVE_PRETRAINING:
-        if os.path.exists(AUGMENTED_FILE):
-            print(f"\nLoading augmented dataset from {AUGMENTED_FILE} for Phase 1...")
-            data = torch.load(AUGMENTED_FILE)
-            
-            if isinstance(data, dict):
-                augmented_data = data["data"]
-            else:
-                augmented_data = data
-            
-            dataset = MidiContrastivePairDataset(augmented_data, midi_tok=midi_tok, text_tok=text_tok)
-        else:
-            print(f"Augmented file not found. Skipping Phase 1.")
-            cfg.USE_CONTRASTIVE_PRETRAINING = False
-        
-        if cfg.USE_CONTRASTIVE_PRETRAINING:
-            loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True)
-            total_steps = len(loader) * cfg.CONTRASTIVE_EPOCHS
-            scheduler = get_linear_schedule_with_warmup(optimizer, int(0.1*total_steps), total_steps)
-            
-            phase_1_pretraining(model, loader, optimizer, scheduler, scaler)
-    
-    if os.path.exists(NORMAL_FILE):
-        print(f"\nLoading standard dataset from {NORMAL_FILE} for Phase 2...")
-        data = torch.load(NORMAL_FILE)
-        dataset = MidiCapsDataset(preloaded_data=data, midi_tok=midi_tok, text_tok=text_tok, is_train=True)
-    else:
-        print("No cache found. Please run data preprocessing first.")
-        return
-    
+    # 5. Prepare DataLoader
+    dataset = MidiCapsDataset(preloaded_data=data, midi_tok=midi_tok, text_tok=text_tok, is_train=True)
     loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True)
-    total_steps = len(loader) * cfg.SUPERVISED_EPOCHS
+    
+    total_steps = len(loader) * cfg.EPOCHS
     scheduler = get_linear_schedule_with_warmup(optimizer, int(0.1*total_steps), total_steps)
     
-    phase_2_finetuning(model, loader, optimizer, scheduler, scaler)
+    # 6. RUN TRAINING
+    train_text_to_midi(model, loader, optimizer, scheduler, scaler)
     
+    # 7. FINAL INDEXING (Create the database for search)
     print("\nIndexing database...")
     model.eval()
     db_embs, db_paths = [], []
     
     idx_loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=False)
     with torch.no_grad():
-        for batch in tqdm(idx_loader, desc="Encoding"):
+        for batch in tqdm(idx_loader, desc="Encoding DB"):
             m_ids = batch["midi_ids"].to(cfg.DEVICE)
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 embs = model.encode_midi(m_ids)
             db_embs.append(embs.float().cpu().numpy())
             db_paths.extend(batch["path"])
     
+    # Save Model + Index
     torch.save({
         "model_state": model.state_dict(),
         "vocab_size": len(midi_tok),
@@ -332,7 +212,7 @@ def main():
         "db_paths": db_paths,
     }, cfg.SAVE_FILE)
     
-    print(f"Done! Model and index saved to {cfg.SAVE_FILE}")
+    print(f"DONE! Model and Search Index saved to {cfg.SAVE_FILE}")
 
 if __name__ == "__main__":
     main()
