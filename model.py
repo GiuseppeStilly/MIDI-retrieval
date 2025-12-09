@@ -30,18 +30,18 @@ class NeuralMidiSearchTransformer(nn.Module):
     def __init__(self, midi_vocab_size):
         super().__init__()
 
-        # Text Encoder
+        # Text Encoder (MPNet)
         self.bert = AutoModel.from_pretrained(cfg.MODEL_NAME)
         self.text_hidden_size = self.bert.config.hidden_size
         self.text_proj = nn.Linear(self.text_hidden_size, cfg.EMBED_DIM)
 
-        # MIDI Encoder
+        # MIDI Encoder (transformer)
         self.midi_emb = nn.Embedding(midi_vocab_size, cfg.MIDI_EMBED_DIM, padding_idx=0)
         
         # Positional Encoding
         self.pos_encoder = PositionalEncoding(d_model=cfg.MIDI_EMBED_DIM, dropout=cfg.DROPOUT)
         
-        # Transformer Encoder (optimized)
+        # Transformer Encoder
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=cfg.MIDI_EMBED_DIM,
             nhead=cfg.NUM_HEADS,
@@ -52,9 +52,6 @@ class NeuralMidiSearchTransformer(nn.Module):
         )
         self.midi_transformer = nn.TransformerEncoder(encoder_layer, num_layers=cfg.NUM_LAYERS)
         self.midi_proj = nn.Linear(cfg.MIDI_EMBED_DIM, cfg.EMBED_DIM)
-        
-        # Temperature for contrastive learning (learnable but limited)
-        self.register_parameter('temperature', nn.Parameter(torch.tensor(cfg.CONTRASTIVE_TEMPERATURE)))
 
     def mean_pooling(self, model_output, attention_mask):
         """Pool text embeddings with attention mask."""
@@ -72,12 +69,12 @@ class NeuralMidiSearchTransformer(nn.Module):
         return sum_embeddings / sum_mask
 
     def forward(self, input_ids, attention_mask, midi_ids):
-        # Text
+        # 1. Text Path
         bert_out = self.bert(input_ids, attention_mask)
         t_vec = self.mean_pooling(bert_out, attention_mask)
         t_emb = F.normalize(self.text_proj(t_vec), p=2, dim=1)
 
-        # MIDI
+        # 2. MIDI Path
         padding_mask = (midi_ids == 0)
         x = self.midi_emb(midi_ids) * math.sqrt(cfg.MIDI_EMBED_DIM)
         x = self.pos_encoder(x)
@@ -88,18 +85,18 @@ class NeuralMidiSearchTransformer(nn.Module):
         return t_emb, m_emb
 
     def encode_midi(self, midi_ids):
-        """Encode MIDI to embedding."""
-        # RIMOSSO torch.no_grad() PERCHE' SERVE NEL TRAINING FASE 1
-        padding_mask = (midi_ids == 0)
-        x = self.midi_emb(midi_ids) * math.sqrt(cfg.MIDI_EMBED_DIM)
-        x = self.pos_encoder(x)
-        x = self.midi_transformer(x, src_key_padding_mask=padding_mask)
-        m_vec = self.midi_mean_pooling(x, padding_mask)
-        return F.normalize(self.midi_proj(m_vec), p=2, dim=1)
+        """Encode MIDI to embedding (inference only)"""
+        with torch.no_grad():
+            padding_mask = (midi_ids == 0)
+            x = self.midi_emb(midi_ids) * math.sqrt(cfg.MIDI_EMBED_DIM)
+            x = self.pos_encoder(x)
+            x = self.midi_transformer(x, src_key_padding_mask=padding_mask)
+            m_vec = self.midi_mean_pooling(x, padding_mask)
+            return F.normalize(self.midi_proj(m_vec), p=2, dim=1)
 
     def encode_text(self, input_ids, attention_mask):
-        """Encode text to embedding."""
-        # RIMOSSO torch.no_grad()
-        bert_out = self.bert(input_ids, attention_mask)
-        t_vec = self.mean_pooling(bert_out, attention_mask)
-        return F.normalize(self.text_proj(t_vec), p=2, dim=1)
+        """Encode text to embedding (inference only)."""
+        with torch.no_grad():
+            bert_out = self.bert(input_ids, attention_mask)
+            t_vec = self.mean_pooling(bert_out, attention_mask)
+            return F.normalize(self.text_proj(t_vec), p=2, dim=1)
