@@ -58,14 +58,14 @@ class MidiCapsDataset(Dataset):
 
 def main():
     # 1. Data Preparation
-    print("📥 Loading Metadata...")
+    print("Loading Metadata...")
     ds = load_dataset("amaai-lab/MidiCaps", split="train")
     train_ds = ds.filter(lambda ex: not ex["test_set"])
     
     # Download physical MIDI files
     midi_root = Path(cfg.MIDI_DATA_DIR)
     if not midi_root.exists():
-        print("⬇️ Downloading MIDI archive...")
+        print("Downloading MIDI archive...")
         path = hf_hub_download(repo_id="amaai-lab/MidiCaps", filename="midicaps.tar.gz", repo_type="dataset")
         with tarfile.open(path) as tar: 
             tar.extractall(midi_root)
@@ -90,7 +90,7 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.LEARNING_RATE)
 
     # 4. Training Loop
-    print(f"🚀 Starting training on {cfg.DEVICE}...")
+    print(f"Starting training on {cfg.DEVICE}...")
     model.train()
     for epoch in range(cfg.EPOCHS):
         total_loss = 0
@@ -120,7 +120,7 @@ def main():
         print(f"Epoch {epoch+1} Avg Loss: {total_loss/len(loader):.4f}")
 
     # 5. Final Indexing (Create Vector Database)
-    print("🗂️ Creating Search Index...")
+    print("Creating Search Index...")
     model.eval()
     db_embs, db_paths = [], []
     idx_loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=False, num_workers=2)
@@ -140,7 +140,7 @@ def main():
         "db_paths": db_paths
     }, cfg.SAVE_FILE)
     
-    print(f"✅ Model and Index saved to {cfg.SAVE_FILE}")
+    print(f"Model and Index saved to {cfg.SAVE_FILE}")
 
 if __name__ == "__main__":
     main()

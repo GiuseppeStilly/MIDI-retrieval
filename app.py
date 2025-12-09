@@ -15,21 +15,21 @@ from model import NeuralMidiSearch
 # --- SYSTEM SETUP ---
 # Install FluidSynth if missing (Linux/Colab specific)
 if os.system("which fluidsynth") != 0:
-    print("⚠️ FluidSynth not found. Installing...")
+    print("FluidSynth not found. Installing...")
     os.system("sudo apt-get update && sudo apt-get install -y fluidsynth fluid-soundfont-gm")
 
 SOUNDFONT = "/usr/share/sounds/sf2/FluidR3_GM.sf2"
 
 # --- RESTORE DATASET (If needed for playback) ---
 if not os.path.exists(cfg.MIDI_DATA_DIR):
-    print("⬇️ Restoring MIDI files for playback...")
+    print("Restoring MIDI files for playback...")
     try:
         os.makedirs(cfg.MIDI_DATA_DIR, exist_ok=True)
         path = hf_hub_download(repo_id="amaai-lab/MidiCaps", filename="midicaps.tar.gz", repo_type="dataset")
         with tarfile.open(path) as tar: 
             tar.extractall(cfg.MIDI_DATA_DIR)
     except Exception as e:
-        print(f"⚠️ Warning: Could not download MIDI files. Playback won't work. {e}")
+        print(f"Warning: Could not download MIDI files. Playback won't work. {e}")
 
 # --- LOAD SYSTEM ---
 def load_system():
@@ -55,7 +55,7 @@ MODEL, TOKENIZER, DB_MATRIX, DB_PATHS = load_system()
 # --- SEARCH LOGIC ---
 def search(query):
     if MODEL is None:
-        return "❌ Error: Model not found. Please run train.py first!", None, None
+        return "Error: Model not found. Please run train.py first!", None, None
 
     # 1. Encode Text Query
     inputs = TOKENIZER([query], padding=True, truncation=True, return_tensors="pt").to(cfg.DEVICE)
@@ -77,7 +77,7 @@ def search(query):
             local_path = os.path.join(root, filename)
             break
             
-    result_text = f"🎵 Result: {filename}\n⭐ Match Score: {best_score:.4f}"
+    result_text = f"Result: {filename}\n Match Score: {best_score:.4f}"
 
     if not local_path:
          return result_text + "\n(Original MIDI file not found on disk)", None, None
@@ -92,8 +92,8 @@ def search(query):
 
 # --- INTERFACE ---
 with gr.Blocks(theme=gr.themes.Soft(), title="AI Music Search") as demo:
-    gr.Markdown("# 🎹 Neural MIDI Search")
-    gr.Markdown("Search for music using natural language (e.g., 'Sad cinematic piano').")
+    gr.Markdown("# Neural MIDI Search")
+    gr.Markdown("Search for music using natural language.")
     
     with gr.Row():
         txt_input = gr.Textbox(placeholder="Describe the music...", label="Query")
