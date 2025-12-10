@@ -1,29 +1,41 @@
-
 import torch
 import os
 
-# --- PATHS ---
-# Automatic Google Drive detection
-DRIVE_ROOT = "/content/drive/MyDrive"
-if not os.path.exists(DRIVE_ROOT):
-    # Fallback for local testing
-    DRIVE_ROOT = "."
+# --- PATH CONFIGURATION ---
+COLAB_DRIVE_PATH = "/content/drive/MyDrive"
 
-SAVE_FILE = os.path.join(DRIVE_ROOT, "midi_search_model.pt")
-MIDI_DATA_DIR = "midicaps_data"
+if os.path.exists(COLAB_DRIVE_PATH):
+    PROJECT_NAME = "MIDI_Retrieval_Project"
+    BASE_DIR = os.path.join(COLAB_DRIVE_PATH, PROJECT_NAME)
+    os.makedirs(BASE_DIR, exist_ok=True)
+    print(f"Environment: Google Colab. Working directory: {BASE_DIR}")
+else:
+    BASE_DIR = "."
+    print(f"Environment: Local/Server. Working directory: Current Folder")
 
-# --- MODEL HYPERPARAMETERS ---
-# We use MiniLM because it's fast and effective for semantic search
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2" 
-EMBED_DIM = 512          # Dimension of the shared latent space
-MIDI_HIDDEN_SIZE = 256   # LSTM hidden size
-MIDI_EMBED_DIM = 256     # MIDI token embedding size
-MAX_SEQ_LEN = 256        # Max length of MIDI token sequence
+# --- FILE PATHS ---
+SAVE_FILE = os.path.join(BASE_DIR, "midi_search_V3.pt")
+CACHE_FILE = os.path.join(BASE_DIR, "dataset_midicaps_tokenized.pt")
+
+# --- MODEL HYPERPARAMETERS (Optimized Student Architecture) ---
+MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
+EMBED_DIM = 384  
+
+# Transformer Architecture
+MIDI_EMBED_DIM = 384  
+NUM_LAYERS = 4        
+NUM_HEADS = 6         
+FF_DIM = 1024         
+DROPOUT = 0.15        
+MAX_SEQ_LEN = 512     
 
 # --- TRAINING HYPERPARAMETERS ---
-BATCH_SIZE = 128
-LEARNING_RATE = 1e-4
-EPOCHS = 2
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+BATCH_SIZE = 256      
+LEARNING_RATE = 5e-5  # Reduced to prevent gradient explosion
+EPOCHS = 15           
 
-print(f" Config loaded. Device: {DEVICE}")
+# --- MARGIN RANKING LOSS ---
+MARGIN = 0.3          
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Config loaded. Device: {DEVICE}")
