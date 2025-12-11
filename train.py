@@ -13,7 +13,12 @@ import numpy as np
 
 # Local imports
 import config as cfg
-from model import NeuralMidiSearch
+
+# Safely import the model
+try:
+    from model import NeuralMidiSearch
+except ImportError:
+    print("Warning: Ensure 'model.py' exists and contains the 'NeuralMidiSearch' class.")
 
 # --- DATASET CLASS ---
 class MidiCapsDataset(Dataset):
@@ -31,7 +36,7 @@ class MidiCapsDataset(Dataset):
         # Tokenize MIDI
         try:
             tokens = self.midi_tok(ex["path"])
-            # Handle different MidiTok versions return types
+            # Handle return types for different MidiTok versions
             ids = tokens.ids if hasattr(tokens, "ids") else tokens[0].ids
         except:
             # Fallback for corrupted files
@@ -58,39 +63,54 @@ class MidiCapsDataset(Dataset):
 
 def main():
     # 1. Data Preparation
-    print("Loading Metadata...")
+    print("Loading Metadata from HuggingFace...")
     ds = load_dataset("amaai-lab/MidiCaps", split="train")
+    
+    # Filter out test set entries
     train_ds = ds.filter(lambda ex: not ex["test_set"])
     
-    # Download physical MIDI files
+    # Download physical MIDI files to a local temp folder for speed
     midi_root = Path(cfg.MIDI_DATA_DIR)
+    
     if not midi_root.exists():
-        print("Downloading MIDI archive...")
+        print(f"Downloading MIDI archive to local folder {midi_root}...")
         path = hf_hub_download(repo_id="amaai-lab/MidiCaps", filename="midicaps.tar.gz", repo_type="dataset")
         with tarfile.open(path) as tar: 
             tar.extractall(midi_root)
+    else:
+        print(f"MIDI data found locally at {midi_root}")
     
     # Build valid example list
     examples = []
-    for item in tqdm(train_ds, desc="Indexing files"):
+    print("Indexing valid MIDI files...")
+    for item in tqdm(train_ds, desc="Checking files"):
         p = midi_root / item["location"]
         if p.exists(): 
             examples.append({"path": str(p), "caption": item["caption"]})
 
+    if len(examples) == 0:
+        print("Error: No MIDI files found. Check the download path.")
+        return
+
     # 2. Initialize Tokenizers
+    print("Initializing Tokenizers...")
     midi_tok = REMI(TokenizerConfig(num_velocities=16, use_chords=True))
     text_tok = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
     
     dataset = MidiCapsDataset(examples, midi_tok, text_tok)
-    # num_workers > 0 speeds up data loading
     loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=True, num_workers=2)
 
     # 3. Initialize Model
+    print(f"Initializing Model on {cfg.DEVICE}...")
     model = NeuralMidiSearch(len(midi_tok)).to(cfg.DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.LEARNING_RATE)
 
     # 4. Training Loop
-    print(f"Starting training on {cfg.DEVICE}...")
+    print("="*60)
+    print(f"STARTING TRAINING V1 (Baseline Logic)")
+    print(f"Target file: {cfg.SAVE_FILE}")
+    print("="*60)
+    
     model.train()
     for epoch in range(cfg.EPOCHS):
         total_loss = 0
@@ -104,12 +124,17 @@ def main():
 
             t_emb, m_emb = model(i_ids, mask, m_ids)
             
-            # --- Contrastive Loss Calculation ---
-            # Calculate similarity matrix
-            logits = (t_emb @ m_emb.T) / model.temperature
+            # --- Contrastive Loss Calculation (V1 Logic) ---
+            # Using model temperature if available, else default to 0.07
+            if hasattr(model, 'temperature'):
+                temp = model.temperature
+            else:
+                temp = 0.07 
+                
+            logits = (t_emb @ m_emb.T) / temp
             labels = torch.arange(logits.shape[0]).to(cfg.DEVICE)
             
-            # Symmetric loss (Text->Midi & Midi->Text)
+            # Symmetric Cross Entropy Loss
             loss = (F.cross_entropy(logits, labels) + F.cross_entropy(logits.T, labels)) / 2.0
             
             loss.backward()
@@ -117,10 +142,11 @@ def main():
             total_loss += loss.item()
             loop.set_postfix(loss=loss.item())
         
-        print(f"Epoch {epoch+1} Avg Loss: {total_loss/len(loader):.4f}")
+        avg_loss = total_loss / len(loader)
+        print(f"Epoch {epoch+1} Avg Loss: {avg_loss:.4f}")
 
     # 5. Final Indexing (Create Vector Database)
-    print("Creating Search Index...")
+    print("\nCreating Search Index...")
     model.eval()
     db_embs, db_paths = [], []
     idx_loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=False, num_workers=2)
@@ -133,6 +159,11 @@ def main():
             db_paths.extend(batch["path"])
             
     # 6. Save Everything
+    print(f"\nSaving to Google Drive: {cfg.SAVE_FILE}")
+    
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(cfg.SAVE_FILE), exist_ok=True)
+    
     torch.save({
         "model_state": model.state_dict(),
         "vocab_size": len(midi_tok),
@@ -140,7 +171,7 @@ def main():
         "db_paths": db_paths
     }, cfg.SAVE_FILE)
     
-    print(f"Model and Index saved to {cfg.SAVE_FILE}")
+    print(f"Done. Saved as v1-lstm.pt")
 
 if __name__ == "__main__":
     main()
