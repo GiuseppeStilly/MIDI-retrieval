@@ -1,10 +1,13 @@
 import os
 import torch
 import numpy as np
+import matplotlib.pyplot as plt # Added for plotting
+import pandas as pd # Added for smoothing the loss curve
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from huggingface_hub import hf_hub_download
-import config as cfg
+# Import config is kept but unused for now as paths are hardcoded for HF download
+import config as cfg 
 from model import NeuralMidiSearchTransformer
 
 # --- CONFIGURATION ---
@@ -14,6 +17,35 @@ CACHE_FILENAME = "test_midicaps_tokenized.pt"
 BATCH_SIZE = 128
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# --- PLOTTING FUNCTION ---
+def plot_training_loss(loss_history):
+    """Generates and displays the loss graph."""
+    if not loss_history:
+        print("No loss history found to plot.")
+        return
+
+    df = pd.Series(loss_history)
+    
+    # Ensure Colab displays the plot inline
+    plt.figure(figsize=(10, 6), dpi=100)
+    
+    # 1. Batch Loss
+    plt.plot(df, label='Batch Loss', alpha=0.3, color='lightblue')
+    
+    # 2. Moving Average (Trend)
+    if len(df) > 50:
+        window = max(5, int(len(df) / 50))
+        moving_avg = df.rolling(window=window).mean()
+        plt.plot(moving_avg, label=f'Trend (Avg {window} steps)', color='blue', linewidth=2)
+
+    plt.xlabel('Training Steps (Batches)')
+    plt.ylabel('Loss')
+    plt.title('Training Loss Curve')
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.show()
+
+# --- DATASET CLASS ---
 class CachedDataset(Dataset):
     def __init__(self, cache_path):
         print(f"Loading data from: {cache_path}")
@@ -52,6 +84,14 @@ def official_test():
     # Using weights_only=False to support numpy arrays in the checkpoint
     checkpoint = torch.load(model_path, map_location=DEVICE, weights_only=False)
     
+    # --- PLOT LOSS HISTORY ---
+    if 'loss_history' in checkpoint:
+        print("\nDisplaying Training Loss History...")
+        plot_training_loss(checkpoint['loss_history'])
+    else:
+        print("\nWarning: 'loss_history' not found in checkpoint. Skipping plot.")
+    # -------------------------
+
     model = NeuralMidiSearchTransformer(checkpoint['vocab_size']).to(DEVICE)
     model.load_state_dict(checkpoint['model_state'])
     model.eval()
@@ -70,8 +110,8 @@ def official_test():
             mask = batch["attention_mask"].to(DEVICE)
             m_ids = batch["midi_ids"].to(DEVICE)
 
-            text_embs.append(model.encode_text(i_ids, mask))
-            midi_embs.append(model.encode_midi(m_ids))
+            text_embs.append(model.encode_text(i_ids, mask).cpu())
+            midi_embs.append(model.encode_midi(m_ids).cpu())
 
     text_tensor = torch.cat(text_embs)
     midi_tensor = torch.cat(midi_embs)
@@ -86,7 +126,6 @@ def official_test():
     
     for i in range(n):
         target_score = sim_matrix[i, i]
-        # Rank: how many scores are higher than the target? + 1
         rank = (sim_matrix[i] > target_score).sum().item() + 1
         ranks.append(rank)
     
