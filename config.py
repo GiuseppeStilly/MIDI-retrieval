@@ -31,7 +31,7 @@ MAX_SEQ_LEN = 256
 # --- TRAINING HYPERPARAMETERS ---
 BATCH_SIZE = 128
 LEARNING_RATE = 1e-4
-EPOCHS = 5
+EPOCHS = 25
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 print(f"Config loaded. Device: {DEVICE}")

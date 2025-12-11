@@ -1,184 +1,109 @@
-import torch
-import torch.nn.functional as F
-import numpy as np
 import os
+import torch
+import numpy as np
+from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
-from transformers import AutoTokenizer
-from datasets import load_dataset
+from huggingface_hub import hf_hub_download
 import config as cfg
 
-# Safely import the model class
-try:
-    from model import NeuralMidiSearch
-except ImportError:
-    print("Error: 'model.py' not found or 'NeuralMidiSearch' class missing.")
+from model import NeuralMidiSearch
 
-def compute_retrieval_metrics(sim_matrix, ground_truth_indices):
-    """
-    Computes R@1, R@5, R@10 and MRR.
+# --- CONFIGURATION ---
+HF_REPO_ID = "GiuseppeStilly/MIDI-Retrieval"
+TEST_FILENAME = "test_midicaps_tokenized.pt"
+
+class CachedDataset(Dataset):
+    def __init__(self, cache_path):
+        print(f"Loading data from: {cache_path}")
+        self.data = torch.load(cache_path, map_location="cpu")
     
-    Args:
-        sim_matrix: Tensor of shape (num_queries, num_database_items) containing similarity scores.
-        ground_truth_indices: List of integers, where the i-th integer is the column index 
-                              of the correct MIDI file in sim_matrix for the i-th query.
-    """
-    r1, r5, r10 = 0, 0, 0
-    mrr = 0
-    num_queries = len(ground_truth_indices)
-
-    # Convert to numpy for easier handling
-    sim_matrix = sim_matrix.cpu().numpy()
+    def __len__(self):
+        return len(self.data)
     
-    print(f"Calculating metrics for {num_queries} queries...")
-    
-    for i in tqdm(range(num_queries)):
-        target_idx = ground_truth_indices[i]
-        
-        # If target is not in the database (e.g. data mismatch), skip
-        if target_idx == -1:
-            continue
+    def __getitem__(self, idx):
+        item = self.data[idx]
+        return {
+            "midi_ids": item["m"].long(),
+            "input_ids": item["i"].long(),
+            "attention_mask": item["a"].long()
+        }
 
-        # Get the scores for this query
-        scores = sim_matrix[i]
-        
-        # Get the indices of the top 10 scores (descending order)
-        # We use argpartition for speed, then sort the top K
-        unsorted_top_k_indices = np.argpartition(scores, -10)[-10:]
-        top_k_indices = unsorted_top_k_indices[np.argsort(scores[unsorted_top_k_indices])][::-1]
-        
-        # Check Recalls
-        if target_idx in top_k_indices[:1]:
-            r1 += 1
-        if target_idx in top_k_indices[:5]:
-            r5 += 1
-        if target_idx in top_k_indices[:10]:
-            r10 += 1
-            
-        # Check MRR (Scan strictly the sorted ranks)
-        # We need the full rank for MRR, or at least search until we find the target
-        # For efficiency, we check if it's in top 100 first, else we consider rank > 100
-        rank = np.where(np.argsort(scores)[::-1] == target_idx)[0][0] + 1
-        mrr += 1.0 / rank
-
-    return {
-        "R@1": r1 / num_queries,
-        "R@5": r5 / num_queries,
-        "R@10": r10 / num_queries,
-        "MRR": mrr / num_queries
-    }
-
-def main():
+def evaluate():
     print("="*60)
-    print("STARTING EVALUATION")
+    print("STARTING EVALUATION (V1 LSTM)")
     print("="*60)
-
-    # 1. Load Checkpoint
-    if not os.path.exists(cfg.SAVE_FILE):
-        print(f"Error: Checkpoint file {cfg.SAVE_FILE} not found. Run training first.")
+    
+    # 1. DOWNLOAD TEST SET
+    try:
+        print(f"Downloading {TEST_FILENAME}...")
+        cache_path = hf_hub_download(repo_id=HF_REPO_ID, filename=TEST_FILENAME, repo_type="model")
+    except Exception as e:
+        print(f"Error downloading test set: {e}")
         return
 
-    print(f"Loading checkpoint from {cfg.SAVE_FILE}...")
+    # 2. LOAD LOCAL MODEL
+    if not os.path.exists(cfg.SAVE_FILE):
+        print(f"Error: Model not found at {cfg.SAVE_FILE}")
+        return
+
+    print(f"Loading Model from: {cfg.SAVE_FILE}")
     checkpoint = torch.load(cfg.SAVE_FILE, map_location=cfg.DEVICE)
     
-    # Extract Database (MIDI Embeddings)
-    db_matrix = torch.tensor(checkpoint["db_matrix"]).to(cfg.DEVICE)
-    db_paths = checkpoint["db_paths"]
-    
-    # Normalize DB embeddings for Cosine Similarity
-    db_matrix = F.normalize(db_matrix, p=2, dim=1)
-    
-    print(f"Database loaded: {len(db_paths)} MIDI files indexed.")
-
-    # 2. Load Model (Text Encoder only needed)
-    print("Loading Text Encoder...")
-    tokenizer = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
-    
-    # We initialize the model structure to load state dict, even if we only need text part mostly
-    model = NeuralMidiSearch(checkpoint["vocab_size"]).to(cfg.DEVICE)
-    model.load_state_dict(checkpoint["model_state"])
+    model = NeuralMidiSearch(checkpoint['vocab_size']).to(cfg.DEVICE)
+    model.load_state_dict(checkpoint['model_state'])
     model.eval()
 
-    # 3. Load Test Data
-    print("Loading Test Dataset from HuggingFace...")
-    ds = load_dataset("amaai-lab/MidiCaps", split="test") # Using 'test' split implies separate evaluation
-    # If no test split exists in your specific version, use validation or filter
-    # ds = ds.filter(lambda ex: ex["test_set"]) 
-    
-    print(f"Found {len(ds)} test captions.")
+    # 3. PREPARE DATA
+    ds = CachedDataset(cache_path)
+    loader = DataLoader(ds, batch_size=cfg.BATCH_SIZE, shuffle=False, num_workers=0)
 
-    # 4. Generate Query Embeddings (Text)
-    print("Encoding text queries...")
-    query_embs = []
-    ground_truth_indices = []
-    
-    # Map db_paths to indices for quick lookup
-    # We normalize paths to just filenames to avoid directory mismatches
-    db_filename_map = {os.path.basename(p): i for i, p in enumerate(db_paths)}
-    
-    missing_files = 0
+    # 4. COMPUTE EMBEDDINGS
+    print(f"Evaluating on {len(ds)} examples...")
+    text_embs, midi_embs = [], []
     
     with torch.no_grad():
-        for item in tqdm(ds, desc="Processing Queries"):
-            # 1. Encode Text
-            txt_inputs = tokenizer(item["caption"], padding="max_length", truncation=True, 
-                                   max_length=64, return_tensors="pt")
-            
-            input_ids = txt_inputs["input_ids"].to(cfg.DEVICE)
-            attention_mask = txt_inputs["attention_mask"].to(cfg.DEVICE)
-            
-            # Forward pass through the text branch of the model
-            # Assuming model has a method or sub-module for text. 
-            # If V1 model calls 'model(input_ids, ...)', we use that but ignore midi output
-            # But we need to isolate the text embedding generation.
-            
-            # Based on standard Dual Encoder architecture:
-            if hasattr(model, 'encode_text'):
-                txt_emb = model.encode_text(input_ids, attention_mask)
-            else:
-                # Fallback: Perform forward pass with dummy MIDI and extract text part
-                # This is inefficient but works if the model class isn't split
-                dummy_midi = torch.zeros((1, 1), dtype=torch.long).to(cfg.DEVICE)
-                txt_emb, _ = model(input_ids, attention_mask, dummy_midi)
+        for batch in tqdm(loader, desc="Generating Embeddings"):
+            i_ids = batch["input_ids"].to(cfg.DEVICE)
+            mask = batch["attention_mask"].to(cfg.DEVICE)
+            m_ids = batch["midi_ids"].to(cfg.DEVICE)
 
-            # Normalize query
-            txt_emb = F.normalize(txt_emb, p=2, dim=1)
-            query_embs.append(txt_emb)
-            
-            # 2. Find Ground Truth Index
-            # The test item has a 'location' (e.g., 'path/to/song.mid')
-            # We check where this file is in our 'db_paths' list
-            filename = os.path.basename(item["location"])
-            
-            if filename in db_filename_map:
-                ground_truth_indices.append(db_filename_map[filename])
-            else:
-                # This happens if the test set refers to a file that wasn't included 
-                # in the training/indexing phase (or download failed)
-                ground_truth_indices.append(-1)
-                missing_files += 1
+            with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
+                if hasattr(model, 'encode_text'):
+                    t_out = model.encode_text(i_ids, mask)
+                    m_out = model.encode_midi(m_ids)
+                else:
+                    t_out, m_out = model(i_ids, mask, m_ids)
 
-    if missing_files > 0:
-        print(f"Warning: {missing_files} test queries point to MIDI files not present in the database index.")
+            text_embs.append(t_out.float().cpu())
+            midi_embs.append(m_out.float().cpu())
 
-    # Stack queries
-    query_matrix = torch.cat(query_embs, dim=0)
-
-    # 5. Compute Metrics
-    print("Computing Similarity Matrix...")
-    # Matrix Multiplication (Cosine Similarity since vectors are normalized)
-    # Shape: [num_queries, num_database_items]
-    sim_matrix = torch.matmul(query_matrix, db_matrix.T)
+    text_tensor = torch.cat(text_embs)
+    midi_tensor = torch.cat(midi_embs)
     
-    results = compute_retrieval_metrics(sim_matrix, ground_truth_indices)
+    # 5. CALCULATE METRICS
+    print("Calculating Similarity Matrix...")
+    sim_matrix = text_tensor @ midi_tensor.T
     
-    print("\n" + "="*30)
+    ranks = []
+    n = sim_matrix.shape[0]
+    
+    for i in range(n):
+        target_score = sim_matrix[i, i]
+        rank = (sim_matrix[i] > target_score).sum().item() + 1
+        ranks.append(rank)
+    
+    ranks = np.array(ranks)
+    mrr = np.mean(1.0 / ranks)
+
+    print("\n" + "="*40)
     print("FINAL RESULTS")
-    print("="*30)
-    print(f"R@1:  {results['R@1']:.4f}")
-    print(f"R@5:  {results['R@5']:.4f}")
-    print(f"R@10: {results['R@10']:.4f}")
-    print(f"MRR:  {results['MRR']:.4f}")
-    print("="*30)
+    print("="*40)
+    print(f"R@1:  {np.mean(ranks <= 1) * 100:.2f}%")
+    print(f"R@5:  {np.mean(ranks <= 5) * 100:.2f}%")
+    print(f"R@10: {np.mean(ranks <= 10) * 100:.2f}%")
+    print(f"MRR:  {mrr:.4f}")
+    print(f"Median Rank: {np.median(ranks):.0f}")
+    print("="*40)
 
 if __name__ == "__main__":
-    main()
+    evaluate()
