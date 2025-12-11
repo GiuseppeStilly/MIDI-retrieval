@@ -10,18 +10,19 @@ import torch.nn.functional as F
 from transformers import AutoModel
 import config as cfg
 
-# --- CONFIGURATION ---
-if hasattr(cfg, 'SAVE_FILE') and os.path.exists(cfg.SAVE_FILE):
-    MODEL_PATH = cfg.SAVE_FILE
-elif os.path.exists("v1_lstm_optimized.pt"):
-    MODEL_PATH = "v1_lstm_optimized.pt"
-elif os.path.exists(os.path.join("runs", "v1_lstm_optimized.pt")):
-    MODEL_PATH = os.path.join("runs", "v1_lstm_optimized.pt")
-else:
-    MODEL_PATH = "midi_search_model.pt"
-
 HF_REPO_ID = "GiuseppeStilly/MIDI-Retrieval"
+MODEL_FILENAME = "v1_lstm_optimized.pt" 
 TEST_FILENAME = "test_midicaps_tokenized.pt"
+
+print(f"Preparing to download model from Hugging Face: {HF_REPO_ID} ...")
+
+try:
+    MODEL_PATH = hf_hub_download(repo_id=HF_REPO_ID, filename=MODEL_FILENAME)
+    print(f"Model downloaded to: {MODEL_PATH}")
+except Exception as e:
+    print(f"Error downloading model from HF: {e}")
+    print("Falling back to local config path...")
+    MODEL_PATH = cfg.SAVE_FILE
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH_SIZE = getattr(cfg, 'BATCH_SIZE', 64)
