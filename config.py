@@ -2,37 +2,47 @@ import os
 import torch
 
 # --- PATH CONFIGURATION ---
-# Check if running on Colab
-COLAB_DRIVE_PATH = "/content/drive/MyDrive"
+# Logic to automatically switch between Google Colab and Local VS Code
 
-if os.path.exists(COLAB_DRIVE_PATH):
-    PROJECT_NAME = "MIDI_Retrieval_Project"
-    BASE_DIR = os.path.join(COLAB_DRIVE_PATH, PROJECT_NAME)
-    os.makedirs(BASE_DIR, exist_ok=True)
-    print(f"Environment: Google Colab. Working directory: {BASE_DIR}")
+# 1. Define the Google Drive root
+COLAB_DRIVE_ROOT = "/content/drive/MyDrive"
+
+# 2. Check if we are running on Colab (Drive exists)
+if os.path.exists(COLAB_DRIVE_ROOT):
+    print("Environment detected: Google Colab")
+    # Define the project folder on Drive
+    PROJECT_DIR = os.path.join(COLAB_DRIVE_ROOT, "MIDI_Retrieval_Project")
+    
+    # Create the folder if it doesn't exist
+    os.makedirs(PROJECT_DIR, exist_ok=True)
+    
+    BASE_DIR = PROJECT_DIR
+    
+    # Keep data local on Colab for speed (do not save dataset to Drive)
+    MIDI_DATA_DIR = "./midicaps_data"
 else:
-    # Environment: Local (VSCode)
+    print("Environment detected: Local (VS Code)")
+    # Save in the current directory
     BASE_DIR = "."
-    print(f"Environment: Local/Server. Working directory: Current Folder")
+    MIDI_DATA_DIR = "midicaps_data"
 
 # --- FILE PATHS ---
-# Saved model name matches the branch name
-SAVE_FILE = os.path.join(BASE_DIR, "v1.0-lstm-minilm.pt")
-MIDI_DATA_DIR = "./data_midi_temp"
+# The model will be saved here
+SAVE_FILE = os.path.join(BASE_DIR, "midi_search_model_v1.pt")
 
 # --- MODEL HYPERPARAMETERS ---
+# Using the exact parameters from your recovered code
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-
-# MiniLM has an embedding dimension of 384
-EMBED_DIM = 384
-MIDI_EMBED_DIM = 384
-MAX_SEQ_LEN = 512
+EMBED_DIM = 512          # Dimension of the shared latent space
+MIDI_HIDDEN_SIZE = 256   # LSTM hidden size
+MIDI_EMBED_DIM = 256     # MIDI token embedding size
+MAX_SEQ_LEN = 256        # Max length of MIDI token sequence
 
 # --- TRAINING HYPERPARAMETERS ---
-BATCH_SIZE = 256
-LEARNING_RATE = 5e-5
-EPOCHS = 15
-
-# --- HARDWARE ---
+BATCH_SIZE = 128
+LEARNING_RATE = 1e-4
+EPOCHS = 2
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Config loaded. Model: {MODEL_NAME} | Output: {SAVE_FILE}")
+
+print(f"Config loaded. Device: {DEVICE}")
+print(f"Target Save File: {SAVE_FILE}")
