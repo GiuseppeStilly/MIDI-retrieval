@@ -188,7 +188,6 @@ def main():
     print(f"R@5:       {np.mean(ranks <= 5) * 100:.2f}%")
     print(f"R@10:      {np.mean(ranks <= 10) * 100:.2f}%")
     print(f"MRR:       {mrr:.4f}")
-    print(f"Mean Rank: {np.mean(ranks):.2f}")
     print("="*40)
 
 if __name__ == "__main__":
