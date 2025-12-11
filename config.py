@@ -9,7 +9,7 @@ else:
     DRIVE_ROOT = "."
 
 # Updated filename for the Transformer version
-SAVE_FILE = os.path.join(DRIVE_ROOT, "midi_search_MPNET_TRANSFORMER.pt")
+SAVE_FILE = os.path.join(DRIVE_ROOT, "v2_transformer_mpnet.pt")
 CACHE_FILE = os.path.join(DRIVE_ROOT, "dataset_midicaps_tokenized.pt")
 MIDI_DATA_DIR = "midicaps_data"
 HF_REPO_ID = "GiuseppeStilly/MIDI-Retrieval" 
