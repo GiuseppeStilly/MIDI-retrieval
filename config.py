@@ -2,46 +2,36 @@ import os
 import torch
 
 # --- PATH CONFIGURATION ---
-# Logic to automatically switch between Google Colab and Local VS Code
+DRIVE_ROOT = "/content/drive/MyDrive"
 
-# 1. Define the Google Drive root
-COLAB_DRIVE_ROOT = "/content/drive/MyDrive"
+# Check environment (Colab vs Local)
+if not os.path.exists(DRIVE_ROOT):
+    DRIVE_ROOT = "." 
 
-# 2. Check if we are running on Colab (Drive exists)
-if os.path.exists(COLAB_DRIVE_ROOT):
-    print("Environment detected: Google Colab")
-    # Define the project folder on Drive
-    PROJECT_DIR = os.path.join(COLAB_DRIVE_ROOT, "MIDI_Retrieval_Project")
-    
-    # Create the folder if it doesn't exist
-    os.makedirs(PROJECT_DIR, exist_ok=True)
-    
-    BASE_DIR = PROJECT_DIR
-    
-    # Keep data local on Colab for speed (do not save dataset to Drive)
-    MIDI_DATA_DIR = "./midicaps_data"
+# Project directory setup
+PROJECT_PATH = os.path.join(DRIVE_ROOT, "MIDI_Retrieval_Project")
+
+if DRIVE_ROOT != ".":
+    os.makedirs(PROJECT_PATH, exist_ok=True)
+    SAVE_FILE = os.path.join(PROJECT_PATH, "v1_lstm_optimized.pt")
 else:
-    print("Environment detected: Local (VS Code)")
-    # Save in the current directory
-    BASE_DIR = "."
-    MIDI_DATA_DIR = "midicaps_data"
+    # Local save
+    os.makedirs("runs", exist_ok=True)
+    SAVE_FILE = os.path.join("runs", "v1_lstm_optimized.pt")
 
-# --- FILE PATHS ---
-# The model will be saved here
-SAVE_FILE = os.path.join(BASE_DIR, "midi_search_model_v1.pt")
+MIDI_DATA_DIR = "midicaps_data"
 
-# --- MODEL HYPERPARAMETERS ---
-# Using the exact parameters from your recovered code
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-EMBED_DIM = 512          # Dimension of the shared latent space
-MIDI_HIDDEN_SIZE = 256   # LSTM hidden size
-MIDI_EMBED_DIM = 256     # MIDI token embedding size
-MAX_SEQ_LEN = 256        # Max length of MIDI token sequence
+# --- MODEL HYPERPARAMETERS (Version 1) ---
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2" 
+EMBED_DIM = 512          
+MIDI_HIDDEN_SIZE = 256   
+MIDI_EMBED_DIM = 256     
+MAX_SEQ_LEN = 256        
 
 # --- TRAINING HYPERPARAMETERS ---
 BATCH_SIZE = 128
 LEARNING_RATE = 1e-4
-EPOCHS = 2
+EPOCHS = 5
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 print(f"Config loaded. Device: {DEVICE}")

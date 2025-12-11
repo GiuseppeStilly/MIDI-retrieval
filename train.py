@@ -10,17 +10,16 @@ from huggingface_hub import hf_hub_download
 from datasets import load_dataset
 from tqdm import tqdm
 import numpy as np
-
-# Local imports
 import config as cfg
 
-# Import model safely
+# Import model
 try:
     from model import NeuralMidiSearch
 except ImportError:
-    print("Warning: 'model.py' not found. Ensure the file is present in the directory.")
+    print("Warning: 'model.py' not found.")
 
-# --- DATASET CLASS ---
+# --- DATASET CLASSES ---
+
 class MidiCapsDataset(Dataset):
     def __init__(self, examples, midi_tok, text_tok):
         self.examples = examples
@@ -36,13 +35,11 @@ class MidiCapsDataset(Dataset):
         # Tokenize MIDI
         try:
             tokens = self.midi_tok(ex["path"])
-            # Handle different MidiTok versions return types
             ids = tokens.ids if hasattr(tokens, "ids") else tokens[0].ids
         except:
-            # Fallback for corrupted files
             ids = [0] 
 
-        # Manual Padding / Truncation
+        # Padding / Truncation
         if len(ids) < cfg.MAX_SEQ_LEN:
             ids = ids + [0] * (cfg.MAX_SEQ_LEN - len(ids))
         else:
@@ -61,41 +58,69 @@ class MidiCapsDataset(Dataset):
             "path": ex["path"]
         }
 
-def main():
-    # 1. Data Preparation
-    print("Loading Metadata...")
-    ds = load_dataset("amaai-lab/MidiCaps", split="train")
-    train_ds = ds.filter(lambda ex: not ex["test_set"])
+class PreTokenizedDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
     
-    # Download physical MIDI files
-    midi_root = Path(cfg.MIDI_DATA_DIR)
-    if not midi_root.exists():
-        print("Downloading MIDI archive...")
-        path = hf_hub_download(repo_id="amaai-lab/MidiCaps", filename="midicaps.tar.gz", repo_type="dataset")
-        with tarfile.open(path) as tar: 
-            tar.extractall(midi_root)
+    def __len__(self):
+        return len(self.data)
     
-    # Build valid example list
-    examples = []
-    for item in tqdm(train_ds, desc="Indexing files"):
-        p = midi_root / item["location"]
-        if p.exists(): 
-            examples.append({"path": str(p), "caption": item["caption"]})
+    def __getitem__(self, idx):
+        return self.data[idx]
 
-    # 2. Initialize Tokenizers
+def main():
+    dataset = None
     midi_tok = REMI(TokenizerConfig(num_velocities=16, use_chords=True))
-    text_tok = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
     
-    dataset = MidiCapsDataset(examples, midi_tok, text_tok)
-    # num_workers > 0 speeds up data loading
+    # 1. Try downloading pre-tokenized dataset
+    print("Checking for pre-tokenized dataset on Hugging Face...")
+    try:
+        file_path = hf_hub_download(
+            repo_id="GiuseppeStilly/MIDI-Retrieval", 
+            filename="test_midicaps_tokenized.pt", 
+            repo_type="model" 
+        )
+        print(f"Found pre-tokenized data at: {file_path}")
+        preloaded_data = torch.load(file_path)
+        dataset = PreTokenizedDataset(preloaded_data)
+        print(f"Loaded {len(dataset)} examples.")
+        
+    except Exception as e:
+        print(f"Pre-tokenized download failed ({e}). Using standard processing.")
+        dataset = None
+
+    # 2. Fallback: Standard Data Preparation
+    if dataset is None:
+        print("Loading Metadata from HuggingFace...")
+        ds = load_dataset("amaai-lab/MidiCaps", split="train")
+        train_ds = ds.filter(lambda ex: not ex["test_set"])
+        
+        midi_root = Path(cfg.MIDI_DATA_DIR)
+        if not midi_root.exists():
+            print("Downloading MIDI archive...")
+            path = hf_hub_download(repo_id="amaai-lab/MidiCaps", filename="midicaps.tar.gz", repo_type="dataset")
+            with tarfile.open(path) as tar: 
+                tar.extractall(midi_root)
+        
+        examples = []
+        for item in tqdm(train_ds, desc="Indexing files"):
+            p = midi_root / item["location"]
+            if p.exists(): 
+                examples.append({"path": str(p), "caption": item["caption"]})
+
+        text_tok = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
+        dataset = MidiCapsDataset(examples, midi_tok, text_tok)
+
+    # 3. Training Loop
     loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=True, num_workers=2)
 
-    # 3. Initialize Model
+    print(f"Initializing Model on {cfg.DEVICE}...")
     model = NeuralMidiSearch(len(midi_tok)).to(cfg.DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.LEARNING_RATE)
+    
+    loss_history = []
 
-    # 4. Training Loop
-    print(f"Starting training on {cfg.DEVICE}...")
+    print(f"Starting training...")
     model.train()
     for epoch in range(cfg.EPOCHS):
         total_loss = 0
@@ -109,43 +134,35 @@ def main():
 
             t_emb, m_emb = model(i_ids, mask, m_ids)
             
-            # --- Contrastive Loss Calculation ---
-            # Calculate similarity matrix
+            # Contrastive Loss (InfoNCE)
             logits = (t_emb @ m_emb.T) / model.temperature
             labels = torch.arange(logits.shape[0]).to(cfg.DEVICE)
             
-            # Symmetric loss (Text->Midi & Midi->Text)
+            # Symmetric Loss
             loss = (F.cross_entropy(logits, labels) + F.cross_entropy(logits.T, labels)) / 2.0
             
             loss.backward()
             optimizer.step()
-            total_loss += loss.item()
-            loop.set_postfix(loss=loss.item())
+            
+            # Track history
+            current_loss = loss.item()
+            loss_history.append(current_loss)
+            total_loss += current_loss
+            
+            loop.set_postfix(loss=current_loss)
         
         print(f"Epoch {epoch+1} Avg Loss: {total_loss/len(loader):.4f}")
 
-    # 5. Final Indexing (Create Vector Database)
-    print("Creating Search Index...")
-    model.eval()
-    db_embs, db_paths = [], []
-    idx_loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=False, num_workers=2)
-    
-    with torch.no_grad():
-        for batch in tqdm(idx_loader, desc="Encoding DB"):
-            m_ids = batch["midi_ids"].to(cfg.DEVICE)
-            embs = model.encode_midi(m_ids)
-            db_embs.append(embs.cpu().numpy())
-            db_paths.extend(batch["path"])
-            
-    # 6. Save Everything
+    # 4. Save Model & History
+    print("Saving model and history...")
     torch.save({
         "model_state": model.state_dict(),
         "vocab_size": len(midi_tok),
-        "db_matrix": np.vstack(db_embs),
-        "db_paths": db_paths
+        "loss_history": loss_history,
+        "config": "V1_Optimized"
     }, cfg.SAVE_FILE)
     
-    print(f"Model and Index saved to {cfg.SAVE_FILE}")
+    print(f"Saved to {cfg.SAVE_FILE}")
 
 if __name__ == "__main__":
     main()
