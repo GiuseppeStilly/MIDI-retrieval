@@ -12,13 +12,10 @@ from tqdm import tqdm
 import numpy as np
 import config as cfg
 
-# Import model
 try:
     from model import NeuralMidiSearch
 except ImportError:
     print("Warning: 'model.py' not found.")
-
-# --- DATASET CLASSES ---
 
 class MidiCapsDataset(Dataset):
     def __init__(self, examples, midi_tok, text_tok):
@@ -32,14 +29,12 @@ class MidiCapsDataset(Dataset):
     def __getitem__(self, idx):
         ex = self.examples[idx]
         
-        # Tokenize MIDI
         try:
             tokens = self.midi_tok(ex["path"])
             ids = tokens.ids if hasattr(tokens, "ids") else tokens[0].ids
         except:
             ids = [0] 
 
-        # Padding / Truncation
         if len(ids) < cfg.MAX_SEQ_LEN:
             ids = ids + [0] * (cfg.MAX_SEQ_LEN - len(ids))
         else:
@@ -47,7 +42,6 @@ class MidiCapsDataset(Dataset):
             
         midi_ids = torch.tensor(ids, dtype=torch.long)
 
-        # Tokenize Text
         txt = self.text_tok(ex["caption"], padding="max_length", truncation=True, 
                             max_length=64, return_tensors="pt")
         
@@ -66,13 +60,31 @@ class PreTokenizedDataset(Dataset):
         return len(self.data)
     
     def __getitem__(self, idx):
-        return self.data[idx]
+        item = self.data[idx]
+        
+        # Handle compressed keys from .pt file ('m', 'i', 'a')
+        m_ids = item.get("m", item.get("midi_ids", [0]))
+        i_ids = item.get("i", item.get("input_ids", [0]))
+        a_mask = item.get("a", item.get("attention_mask", [0]))
+
+        if not isinstance(m_ids, torch.Tensor):
+            m_ids = torch.tensor(m_ids, dtype=torch.long)
+        if not isinstance(i_ids, torch.Tensor):
+            i_ids = torch.tensor(i_ids, dtype=torch.long)
+        if not isinstance(a_mask, torch.Tensor):
+            a_mask = torch.tensor(a_mask, dtype=torch.long)
+
+        return {
+            "midi_ids": m_ids,
+            "input_ids": i_ids,
+            "attention_mask": a_mask,
+            "path": item.get("path", "unknown")
+        }
 
 def main():
     dataset = None
     midi_tok = REMI(TokenizerConfig(num_velocities=16, use_chords=True))
     
-    # 1. Try downloading pre-tokenized dataset
     print("Checking for pre-tokenized dataset on Hugging Face...")
     try:
         file_path = hf_hub_download(
@@ -81,7 +93,7 @@ def main():
             repo_type="model" 
         )
         print(f"Found pre-tokenized data at: {file_path}")
-        preloaded_data = torch.load(file_path)
+        preloaded_data = torch.load(file_path, map_location="cpu")
         dataset = PreTokenizedDataset(preloaded_data)
         print(f"Loaded {len(dataset)} examples.")
         
@@ -89,7 +101,6 @@ def main():
         print(f"Pre-tokenized download failed ({e}). Using standard processing.")
         dataset = None
 
-    # 2. Fallback: Standard Data Preparation
     if dataset is None:
         print("Loading Metadata from HuggingFace...")
         ds = load_dataset("amaai-lab/MidiCaps", split="train")
@@ -111,8 +122,7 @@ def main():
         text_tok = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
         dataset = MidiCapsDataset(examples, midi_tok, text_tok)
 
-    # 3. Training Loop
-    loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=True, num_workers=2)
+    loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=True, num_workers=0)
 
     print(f"Initializing Model on {cfg.DEVICE}...")
     model = NeuralMidiSearch(len(midi_tok)).to(cfg.DEVICE)
@@ -134,17 +144,14 @@ def main():
 
             t_emb, m_emb = model(i_ids, mask, m_ids)
             
-            # Contrastive Loss (InfoNCE)
             logits = (t_emb @ m_emb.T) / model.temperature
             labels = torch.arange(logits.shape[0]).to(cfg.DEVICE)
             
-            # Symmetric Loss
             loss = (F.cross_entropy(logits, labels) + F.cross_entropy(logits.T, labels)) / 2.0
             
             loss.backward()
             optimizer.step()
             
-            # Track history
             current_loss = loss.item()
             loss_history.append(current_loss)
             total_loss += current_loss
@@ -153,7 +160,6 @@ def main():
         
         print(f"Epoch {epoch+1} Avg Loss: {total_loss/len(loader):.4f}")
 
-    # 4. Save Model & History
     print("Saving model and history...")
     torch.save({
         "model_state": model.state_dict(),
