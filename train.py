@@ -62,7 +62,7 @@ class PreTokenizedDataset(Dataset):
     def __getitem__(self, idx):
         item = self.data[idx]
         
-        # Handle compressed keys from .pt file ('m', 'i', 'a')
+        # Handle short keys from .pt file ('m', 'i', 'a') to avoid KeyError
         m_ids = item.get("m", item.get("midi_ids", [0]))
         i_ids = item.get("i", item.get("input_ids", [0]))
         a_mask = item.get("a", item.get("attention_mask", [0]))
@@ -89,7 +89,7 @@ def main():
     try:
         file_path = hf_hub_download(
             repo_id="GiuseppeStilly/MIDI-Retrieval", 
-            filename="test_midicaps_tokenized.pt", 
+            filename="dataset_midicaps_tokenized.pt", 
             repo_type="model" 
         )
         print(f"Found pre-tokenized data at: {file_path}")
