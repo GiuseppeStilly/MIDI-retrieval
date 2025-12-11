@@ -100,15 +100,7 @@ def plot_training_loss(loss_history):
     plt.title('Training Loss Curve')
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
-    
-    # Save and show
-    plt.savefig('training_loss.png')
-    print("Graph saved to 'training_loss.png'")
-    try:
-        plt.show()
-    except:
-        pass
-
+    plt.show()
 # --- EXECUTION ---
 
 def main():
