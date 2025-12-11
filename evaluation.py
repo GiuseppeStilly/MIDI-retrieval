@@ -9,7 +9,7 @@ from model import NeuralMidiSearchTransformer
 
 # --- CONFIGURATION ---
 REPO_ID = "GiuseppeStilly/MIDI-retrieval"
-MODEL_FILENAME = "midi_search_MPNET_TRANSFORMER.pt"
+MODEL_FILENAME = "v2_transformer_mpnet.pt"
 CACHE_FILENAME = "test_midicaps_tokenized.pt"
 BATCH_SIZE = 128
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

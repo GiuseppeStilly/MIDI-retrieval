@@ -2,15 +2,19 @@ import torch
 import os
 
 # --- PATHS ---
-# Automatic detection for local or Drive environment
 if os.path.exists("/content/drive/MyDrive"):
-    DRIVE_ROOT = "/content/drive/MyDrive"
+    BASE_ROOT = "/content/drive/MyDrive"
 else:
-    DRIVE_ROOT = "."
+    BASE_ROOT = "."
 
-# Updated filename for the Transformer version
-SAVE_FILE = os.path.join(DRIVE_ROOT, "v2_transformer_mpnet.pt")
-CACHE_FILE = os.path.join(DRIVE_ROOT, "dataset_midicaps_tokenized.pt")
+PROJECT_FOLDER = "MIDI_Retrieval_Project"
+PROJECT_PATH = os.path.join(BASE_ROOT, PROJECT_FOLDER)
+
+os.makedirs(PROJECT_PATH, exist_ok=True)
+
+SAVE_FILE = os.path.join(PROJECT_PATH, "v2_transformer_mpnet.pt")
+CACHE_FILE = os.path.join(PROJECT_PATH, "dataset_midicaps_tokenized.pt")
+
 MIDI_DATA_DIR = "midicaps_data"
 HF_REPO_ID = "GiuseppeStilly/MIDI-Retrieval" 
 
