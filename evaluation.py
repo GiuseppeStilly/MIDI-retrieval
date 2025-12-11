@@ -91,6 +91,7 @@ def official_test():
         ranks.append(rank)
     
     ranks = np.array(ranks)
+    mrr = np.mean(1.0 / ranks)
 
     print("\n" + "="*40)
     print("OFFICIAL RESULTS (Hugging Face)")
@@ -98,7 +99,7 @@ def official_test():
     print(f"R@1:  {np.mean(ranks <= 1) * 100:.2f}%")
     print(f"R@5:  {np.mean(ranks <= 5) * 100:.2f}%")
     print(f"R@10: {np.mean(ranks <= 10) * 100:.2f}%")
-    print(f"Median Rank: {np.median(ranks):.0f}")
+    print(f"MRR:       {mrr:.4f}")
     print("="*40)
 
 if __name__ == "__main__":
