@@ -1,11 +1,12 @@
 import os
 import torch
 import numpy as np
-import matplotlib.pyplot as plt 
-import pandas as pd 
+import matplotlib.pyplot as plt # Added for plotting
+import pandas as pd # Added for smoothing the loss curve
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from huggingface_hub import hf_hub_download
+# Import config is kept but unused for now as paths are hardcoded for HF download
 import config as cfg 
 from model import NeuralMidiSearchTransformer
 
@@ -16,15 +17,16 @@ CACHE_FILENAME = "test_midicaps_tokenized.pt"
 BATCH_SIZE = 128
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# --- PLOTTING FUNCTION (Updated for VS Code) ---
+# --- PLOTTING FUNCTION ---
 def plot_training_loss(loss_history):
-    """Generates and saves the loss graph to a file."""
+    """Generates and displays the loss graph."""
     if not loss_history:
         print("No loss history found to plot.")
         return
 
     df = pd.Series(loss_history)
     
+    # Ensure Colab displays the plot inline
     plt.figure(figsize=(10, 6), dpi=100)
     
     # 1. Batch Loss
@@ -41,12 +43,7 @@ def plot_training_loss(loss_history):
     plt.title('Training Loss Curve')
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
-    
-    # CHANGED: Save to file instead of showing window
-    output_file = "training_loss.png"
-    plt.savefig(output_file)
-    plt.close()
-    print(f"Graph saved to {output_file}")
+    plt.show()
 
 # --- DATASET CLASS ---
 class CachedDataset(Dataset):
@@ -89,7 +86,7 @@ def official_test():
     
     # --- PLOT LOSS HISTORY ---
     if 'loss_history' in checkpoint:
-        print("\nSaving Training Loss History...")
+        print("\nDisplaying Training Loss History...")
         plot_training_loss(checkpoint['loss_history'])
     else:
         print("\nWarning: 'loss_history' not found in checkpoint. Skipping plot.")
