@@ -1,65 +1,52 @@
 import gradio as gr
-from inference import SearchEngine
+from inference_engine import MIDI_Search_Engine
 
-# 1. Initialize Logic
-print("Initializing Transformer Search Engine...")
-engine = SearchEngine()
+# 1. Initialize the Engine (Runs once on startup)
+print("Starting Gradio server...")
+engine = MIDI_Search_Engine()
 
-# 2. Define Custom Theme
+# 2. Define the Interface Function
+def gradio_search(text):
+    results = engine.search(text, top_k=10)
+    
+    # Format data for Gradio Table
+    # Columns: Index, Total Score, V1 Score, V2 Score
+    output_data = []
+    for r in results:
+        output_data.append([
+            r['idx'], 
+            f"{r['score']:.4f}", 
+            f"{r['score_v1']:.4f}", 
+            f"{r['score_v2']:.4f}"
+        ])
+    return output_data
 
-custom_theme = gr.themes.Default(
-    primary_hue="pink",   # Base color for primary actions (Pink)
-    neutral_hue="slate",  # Base color for structure (Cool dark grays)
-).set(
-    # --- Background Colors ---
-    body_background_fill="#090918",        # Very dark blue/purple (Main background)
-    body_background_fill_dark="#090918",   
-    block_background_fill="#14142B",       # Slightly lighter blue (Container background)
-    block_background_fill_dark="#14142B",
+# 3. Build the UI
+with gr.Blocks(theme=gr.themes.Soft()) as demo:
+    gr.Markdown("# Neural MIDI Search (Ensemble V1 + V2)")
+    gr.Markdown("Retrieve MIDI files from the dataset using natural language descriptions.")
     
-    # --- Text Colors ---
-    body_text_color="#FFFFFF",             # White text for readability
-    body_text_color_dark="#FFFFFF",
-    block_label_text_color="#FF66C4",      # Light pink for labels (Query, Result Info)
-    
-    # --- Input Fields ---
-    input_background_fill="#1E1E3F",       # Dark blue for textboxes
-    input_background_fill_dark="#1E1E3F",
-    input_border_color="#4B4B8B",
-    
-    # --- Buttons (The "Pop" Color) ---
-    button_primary_background_fill="#D6008D",       # Vibrant Magenta/Pink 
-    button_primary_background_fill_hover="#B50077", # Darker pink on hover
-    button_primary_text_color="#FFFFFF",
-    
-    # --- Borders ---
-    block_border_width="1px",
-    block_border_color="#2E2E5C"
-)
-
-# 3. Define UI
-with gr.Blocks(theme=custom_theme) as demo:
-    # Header Section
-    gr.Markdown("# AI MIDI Search (Transformer Edition)")
-    gr.Markdown("Searching using **MPNet** + **4-Layer Transformer** architecture.")
-    
-    # Input Section
     with gr.Row():
-        txt = gr.Textbox(
-            label="Text Query", 
-            placeholder="A sad piano melody in A minor...", 
-            lines=1
-        )
-        btn = gr.Button("SEARCH", variant="primary", scale=0) # scale=0 keeps button small
-    
-    # Output Section
-    with gr.Row():
-        lbl = gr.Textbox(label="Result Info")
-        aud = gr.Audio(label="Preview")
-        file = gr.File(label="Download MIDI")
+        with gr.Column(scale=1):
+            txt_input = gr.Textbox(
+                label="Description", 
+                placeholder="e.g., A fast rock song with electric guitar...", 
+                lines=2
+            )
+            btn_search = gr.Button("Search MIDI", variant="primary")
         
-    # Interaction Logic
-    btn.click(engine.search, inputs=txt, outputs=[lbl, aud, file])
+        with gr.Column(scale=2):
+            output_table = gr.Dataframe(
+                headers=["Dataset Index", "Ensemble Score", "V1 Score", "V2 Score"],
+                label="Top Results",
+                datatype=["number", "str", "str", "str"],
+                interactive=False
+            )
 
+    # Triggers (Button click or Enter key)
+    btn_search.click(fn=gradio_search, inputs=txt_input, outputs=output_table)
+    txt_input.submit(fn=gradio_search, inputs=txt_input, outputs=output_table)
+
+# 4. Launch App
 if __name__ == "__main__":
-    demo.launch(share=True)
+    demo.launch()
