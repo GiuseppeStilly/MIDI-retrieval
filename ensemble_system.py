@@ -1,126 +1,144 @@
-import os
-import requests
-import importlib.util
 import torch
-from tqdm import tqdm
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+from transformers import AutoModel
 from huggingface_hub import hf_hub_download
+from tqdm import tqdm
 
 # --- CONFIGURATION ---
-GITHUB_USER = "GiuseppeStilly"
-REPO_NAME = "MIDI-retrieval"
 HF_REPO_ID = "GiuseppeStilly/MIDI-Retrieval"
-
-# Branch & Weight Definitions
-MODEL_CONFIGS = {
-    "v1": {
-        "branch": "main",
-        "file": "model.py",
-        "class": "NeuralMidiSearch",
-        "weights": "v1_lstm_optimized.pt",
-        "desc": "LSTM + MiniLM"
-    },
-    "v2": {
-        "branch": "v2.0-MPNET+Transformer",
-        "file": "model.py",
-        "class": "NeuralMidiSearchTransformer",
-        "weights": "v2_transformer_mpnet.pt",
-        "desc": "Transformer + MPNet"
-    }
-}
-
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+EMBED_DIM = 512
 
-class EnsembleEngine:
-    """
-    Manages the dynamic loading of different model architectures from Git
-    and performs inference to generate the ensemble score.
-    """
-    
-    def __init__(self):
-        self.temp_files = []
+# ARCHITECTURE V1 (LSTM + MiniLM)
+class NeuralMidiSearch_V1(nn.Module):
+    def __init__(self, midi_vocab_size):
+        super().__init__()
+        # Text Encoder
+        self.bert = AutoModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+        self.text_proj = nn.Linear(self.bert.config.hidden_size, EMBED_DIM)
+        
+        # MIDI Encoder
+        self.midi_emb = nn.Embedding(midi_vocab_size, 256)
+        self.lstm = nn.LSTM(256, 256, batch_first=True, bidirectional=True)
+        self.midi_proj = nn.Linear(512, EMBED_DIM) 
+        self.temperature = nn.Parameter(torch.tensor(0.07))
 
-    def _fetch_class(self, version):
-        """Dynamically downloads and imports the model class from GitHub."""
-        cfg = MODEL_CONFIGS[version]
-        local_name = f"arch_{version}_temp.py"
-        self.temp_files.append(local_name)
-        
-        url = f"https://raw.githubusercontent.com/{GITHUB_USER}/{REPO_NAME}/{cfg['branch']}/{cfg['file']}"
-        print(f"📥 Fetching {cfg['desc']} source from branch '{cfg['branch']}'...")
-        
-        try:
-            response = requests.get(url)
-            if response.status_code != 200:
-                raise ConnectionError(f"Failed to download {url}")
-            
-            with open(local_name, "w") as f:
-                f.write(response.text)
-                
-            spec = importlib.util.spec_from_file_location(f"mod_{version}", local_name)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            return getattr(module, cfg['class'])
-        except Exception as e:
-            print(f"Error importing {version}: {e}")
-            return None
+    def mean_pooling(self, model_output, attention_mask):
+        token = model_output.last_hidden_state
+        mask = attention_mask.unsqueeze(-1).expand(token.size()).float()
+        return torch.sum(token * mask, 1) / torch.clamp(mask.sum(1), min=1e-9)
 
-    def _compute_embeddings(self, model, loader, desc):
-        """Runs the forward pass to get text and MIDI embeddings."""
-        text_embs, midi_embs = [], []
-        model.eval()
-        
+    def encode_midi(self, midi_ids):
         with torch.no_grad():
-            for batch in tqdm(loader, desc=desc):
-                i_ids = batch["input_ids"].to(DEVICE)
-                mask = batch["attention_mask"].to(DEVICE)
-                m_ids = batch["midi_ids"].to(DEVICE)
-                
-                with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
-                    t_out = model.encode_text(i_ids, mask)
-                    m_out = model.encode_midi(m_ids)
-                
-                text_embs.append(t_out.float().cpu())
-                midi_embs.append(m_out.float().cpu())
-                
-        return torch.cat(text_embs), torch.cat(midi_embs)
+            x = self.midi_emb(midi_ids)
+            x, _ = self.lstm(x)
+            vec = torch.mean(x, dim=1)
+            return F.normalize(self.midi_proj(vec), p=2, dim=1)
 
-    def get_similarity_matrix(self, version, loader):
-        """
-        Loads the specific model version, runs inference, returns Sim Matrix, 
-        and clears GPU memory immediately.
-        """
-        cfg = MODEL_CONFIGS[version]
+    def encode_text(self, input_ids, attention_mask):
+        with torch.no_grad():
+            out = self.bert(input_ids, attention_mask)
+            vec = self.mean_pooling(out, attention_mask)
+            return F.normalize(self.text_proj(vec), p=2, dim=1)
+
+# ARCHITECTURE V2 (Transformer + MPNet)
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div)
+        pe[:, 1::2] = torch.cos(position * div)
+        pe = pe.unsqueeze(0) 
+        self.register_buffer('pe', pe)
+
+    def forward(self, x): return x + self.pe[:, :x.size(1)]
+
+class NeuralMidiSearch_V2(nn.Module):
+    def __init__(self, midi_vocab_size):
+        super().__init__()
+        midi_hidden = 256
         
-        # 1. Get Class
-        ModelClass = self._fetch_class(version)
-        if not ModelClass: return None
+        # Text Encoder
+        self.bert = AutoModel.from_pretrained("sentence-transformers/all-mpnet-base-v2")
+        self.text_proj = nn.Linear(768, EMBED_DIM) 
 
-        # 2. Download Weights
-        print(f"Downloading weights: {cfg['weights']}...")
-        try:
-            path = hf_hub_download(repo_id=HF_REPO_ID, filename=cfg['weights'])
-            ckpt = torch.load(path, map_location=DEVICE, weights_only=False)
-            
-            # Initialize Model
-            vocab_size = ckpt.get('vocab_size', 3000)
-            model = ModelClass(vocab_size).to(DEVICE)
-            model.load_state_dict(ckpt['model_state'], strict=False)
-            
-            # 3. Run Inference
-            text, midi = self._compute_embeddings(model, loader, desc=f"Running {cfg['desc']}")
-            sim_matrix = text @ midi.T
-            
-            # 4. Cleanup to save memory for the next model
-            del model, ckpt, text, midi
-            torch.cuda.empty_cache()
-            
-            return sim_matrix
-            
-        except Exception as e:
-            print(f" Error processing {version}: {e}")
-            return None
+        # MIDI Encoder
+        self.midi_emb = nn.Embedding(midi_vocab_size, midi_hidden)
+        self.pos_encoder = PositionalEncoding(midi_hidden)
+        
+        layer = nn.TransformerEncoderLayer(
+            d_model=midi_hidden, nhead=4, 
+            dim_feedforward=1024, # Critical fix for V2
+            batch_first=True
+        )
+        self.midi_transformer = nn.TransformerEncoder(layer, num_layers=4)
+        self.midi_proj = nn.Linear(midi_hidden, EMBED_DIM)
+        self.temperature = nn.Parameter(torch.tensor(0.07))
 
-    def cleanup(self):
-        """Removes temporary python files."""
-        for f in self.temp_files:
-            if os.path.exists(f): os.remove(f)
+    def mean_pooling(self, model_output, attention_mask):
+        token = model_output.last_hidden_state
+        mask = attention_mask.unsqueeze(-1).expand(token.size()).float()
+        return torch.sum(token * mask, 1) / torch.clamp(mask.sum(1), min=1e-9)
+
+    def encode_midi(self, midi_ids):
+        with torch.no_grad():
+            x = self.midi_emb(midi_ids)
+            x = self.pos_encoder(x)
+            x = self.midi_transformer(x)
+            vec = torch.mean(x, dim=1)
+            return F.normalize(self.midi_proj(vec), p=2, dim=1)
+
+    def encode_text(self, input_ids, attention_mask):
+        with torch.no_grad():
+            out = self.bert(input_ids, attention_mask)
+            vec = self.mean_pooling(out, attention_mask)
+            return F.normalize(self.text_proj(vec), p=2, dim=1)
+
+# ==========================================
+# HELPER FUNCTIONS
+# ==========================================
+def load_model(version, filename):
+    print(f"Loading {version} model from {filename}...")
+    try:
+        path = hf_hub_download(repo_id=HF_REPO_ID, filename=filename)
+        ckpt = torch.load(path, map_location=DEVICE, weights_only=False)
+        vocab_size = ckpt.get('vocab_size', 3000)
+        
+        if version == "V1":
+            model = NeuralMidiSearch_V1(vocab_size)
+        else:
+            model = NeuralMidiSearch_V2(vocab_size)
+            
+        model.to(DEVICE)
+        model.load_state_dict(ckpt['model_state'], strict=False)
+        model.eval()
+        return model
+    except Exception as e:
+        print(f"Error loading {version}: {e}")
+        return None
+
+def compute_similarity_matrix(model, loader, desc):
+    text_embs, midi_embs = [], []
+    
+    with torch.no_grad():
+        for batch in tqdm(loader, desc=desc):
+            i_ids = batch["input_ids"].to(DEVICE)
+            mask = batch["attention_mask"].to(DEVICE)
+            m_ids = batch["midi_ids"].to(DEVICE)
+            
+            # Autocast for performance
+            with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
+                t = model.encode_text(i_ids, mask)
+                m = model.encode_midi(m_ids)
+            
+            text_embs.append(t.float().cpu())
+            midi_embs.append(m.float().cpu())
+            
+    T = torch.cat(text_embs)
+    M = torch.cat(midi_embs)
+    
+    return T @ M.T
