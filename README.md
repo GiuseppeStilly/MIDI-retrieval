@@ -1,39 +1,55 @@
 
-# Neural MIDI Search (Transformer Edition)
-
+# Neural MIDI Search 
 Team composition: Edoardo Besteghi, Riccoardo Bucchi D'Incecco, Giuseppe Stillitano
 
-This repository contains the source code for a Cross-Modal Information Retrieval system designed to align Natural Language with Symbolic Music (MIDI). The system enables semantic search of musical files using descriptive text queries.
+This repository contains the source code for a **Cross-Modal Information Retrieval** system designed to align Natural Language with Symbolic Music (MIDI). The system enables semantic search of musical files using descriptive text queries, leveraging state-of-the-art Transformer architectures.
 
-The goal is to bridge the gap between semantic descriptions (e.g., "A sad piano melody in A minor") and symbolic music representations by mapping both into a shared 384-dimensional embedding space.
+The goal is to bridge the "modality gap" between semantic descriptions (e.g., *"A sad piano melody in A minor with a slow build-up"*) and symbolic music representations by mapping both into a shared, high-dimensional embedding space.
 
 ## Approach
 
-The project leverages a **Two-Tower (Dual Encoder)** architecture trained using Contrastive Learning. The system consists of a "Teacher" text encoder and a "Student" MIDI encoder optimized via Margin Ranking Loss.
+The project leverages a **Two-Tower (Dual Encoder)** architecture trained using Contrastive Learning. This approach treats the problem as a representation learning task, where a "Student" MIDI model learns to align its output space with a pre-trained "Teacher" Text model.
 
-### 1. Architecture & Encoders
+### 1. Feature Engineering & Tokenization
+Unlike raw audio, MIDI is symbolic. We process the data using the **REMI (Revamped MIDI)** tokenization scheme via `miditok`.
+* **Event-Based Representation:** Music is converted into a sequence of tokens representing Pitch, Velocity (dynamics), Duration, and Chords.
+* **Data Augmentation:** To improve generalization and handle variable-length sequences, we implement **Random Cropping** during the training phase, sampling fixed-length windows (512 tokens) from longer musical compositions.
 
-The model aligns two distinct modalities into a joint embedding space:
+### 2. Model Architecture
+The system consists of two parallel encoders projecting data into a shared **384-dimensional embedding space**:
 
-* **Text Encoder (Teacher):** We utilize `sentence-transformers/all-mpnet-base-v2`, a pre-trained Transformer that produces robust semantic embeddings (Dimension: 384). This branch is frozen during training to serve as a stable target.
-* **MIDI Encoder (Student):** A custom 4-layer Transformer Encoder designed from scratch.
-    * **Tokenization:** Uses the REMI (Revamped MIDI) representation via `miditok`, capturing Pitch, Velocity, Duration, and Chords.
-    * **Specs:** 6 Attention Heads, 384 Embedding Dimension, 1024 Feed-Forward dimension.
-    * **Augmentation:** Implements Random Cropping during training to improve generalization on variable-length sequences.
+* **Text Encoder (The Teacher):**
+    * We utilize `sentence-transformers/all-mpnet-base-v2`, a powerful pre-trained Transformer.
+    * This branch produces robust semantic embeddings and is **frozen** during training to serve as a stable target for the MIDI encoder.
+* **MIDI Encoder (The Student):**
+    * A custom **4-layer Transformer Encoder** designed from scratch for this task.
+    * **Specifications:** 6 Attention Heads, 384 Embedding Dimension, 1024 Feed-Forward dimension, GeLU activation.
+    * **Positional Encoding:** Standard Sinusoidal encoding is added to preserve the temporal order of musical events.
 
-### 2. Training & Inference
+### 3. Training Strategy
+The model is trained to minimize the distance between a MIDI file and its correct caption while maximizing the distance from incorrect ones (Contrastive Learning).
 
-The model is trained to minimize the distance between a MIDI file and its correct caption while maximizing the distance from incorrect ones.
-
-* **Loss Function:** A **Margin Ranking Loss** (margin=0.3) is used with Hard Negative Mining to penalize the model only when incorrect matches are ranked higher than the correct one.
-* **Optimization:** Trained using AdamW with a linear warmup scheduler and Mixed Precision (AMP) for efficiency.
-* **Retrieval:** At inference time, both the query and the database are encoded. We compute Cosine Similarity between the query vector and all MIDI vectors to rank the results.
+* **Objective Function:** We employ **Margin Ranking Loss** (margin = 0.3). This loss function ensures that the similarity score of a positive pair (Text, MIDI) is higher than any negative pair by at least the specified margin.
+* **Hard Negative Mining:** Instead of random negatives, the training loop computes the similarity matrix for the entire batch (Batch Size = 256) and treats all non-diagonal elements as negative samples. This pushes the model to distinguish between closely related musical concepts.
+* **Optimization:** The training utilizes the **AdamW** optimizer with a linear warmup scheduler and **Mixed Precision (AMP)** to accelerate training on GPU.
 
 ## Repository Structure
 
-* `config.py`: Contains all global constants, hyperparameters (e.g., `EMBED_DIM`, `BATCH_SIZE`), and path configurations.
-* `model.py`: Contains the PyTorch implementation of the `NeuralMidiSearchTransformer` class, including the Positional Encoding and the Text/MIDI projection layers.
-* `train.py`: Contains the training loop, the `MidiCapsDataset` class for data loading, and the validation logic using Hard Negative Mining.
-* `inference.py`: Contains the `SearchEngine` class that handles model loading, embedding generation, and the audio rendering pipeline using FluidSynth.
-* `app.py`: Contains the Gradio web application definition, implementing the custom UI theme and interaction logic.
-* `test.py`: Contains the official evaluation script that downloads the trained model from Hugging Face and computes retrieval metrics (R@1, R@5, R@10).
+### Core Configuration
+* `config.py`: Contains all global constants, hyperparameters (e.g., `EMBED_DIM`, `BATCH_SIZE`, `LEARNING_RATE`), and dynamic path configurations for local vs. Colab environments.
+
+### Modeling & Training
+* `model.py`: Defines the `NeuralMidiSearchTransformer` class. It includes the logic for the frozen MPNet text encoder, the learnable MIDI Transformer, and the custom Positional Encoding.
+* `train.py`: The main training script. It implements:
+    * The `MidiCapsDataset` class for efficient data loading.
+    * The training loop with **Gradient Scaling** (for AMP).
+    * Checkpoint saving and validation logic using the Margin Ranking Loss.
+
+### Inference & Application
+* `inference.py`: Contains the `SearchEngine` class. This module handles:
+    * Loading the trained model weights.
+    * Tokenizing input text queries on the fly.
+    * Performing Cosine Similarity search against the indexed database.
+    * **Audio Rendering:** A pipeline that converts retrieved MIDI tokens to WAV audio using **FluidSynth** for immediate playback.
+* `app.py`: A **Gradio** web application that provides a user-friendly interface. It features a custom "Neon/Dark" theme and allows users to input text, view retrieval results, and listen to the generated audio.
+* `test.py`: The official evaluation script. It downloads the trained model from Hugging Face, runs it on the held-out test set, and computes standard Information Retrieval metrics (**Recall@1**, **Recall@5**, **Recall@10** and **Median Rank**).
