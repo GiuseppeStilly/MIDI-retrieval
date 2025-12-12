@@ -135,10 +135,8 @@ def main():
         
         print(f"Epoch {epoch+1} Avg Loss: {total_loss/len(loader):.4f}")
 
-        # --- SAVE CHECKPOINT EVERY EPOCH ---
         print(f"Saving checkpoint for Epoch {epoch+1}...")
         
-        # Save without full DB indexing to be fast (indexing can be done at inference)
         torch.save({
             "model_state": model.state_dict(),
             "vocab_size": len(midi_tok),
