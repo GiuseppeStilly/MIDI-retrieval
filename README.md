@@ -1,8 +1,7 @@
-# MIDI-retrieval
 
 # Neural MIDI Search (Transformer Edition)
 
-Team composition: [Tuo Nome], [Nome Amico]
+Team composition: Edoardo Besteghi, Riccoardo Bucchi D'Incecco, Giuseppe Stillitano
 
 This repository contains the source code for a Cross-Modal Information Retrieval system designed to align Natural Language with Symbolic Music (MIDI). The system enables semantic search of musical files using descriptive text queries.
 
