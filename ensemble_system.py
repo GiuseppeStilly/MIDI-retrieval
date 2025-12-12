@@ -23,7 +23,7 @@ MODEL_CONFIGS = {
         "branch": "v2.0-MPNET+Transformer",
         "file": "model.py",
         "class": "NeuralMidiSearchTransformer",
-        "weights": "midi_search_MPNET_TRANSFORMER.pt",
+        "weights": "v2_transformer_mpnet.pt",
         "desc": "Transformer + MPNet"
     }
 }
