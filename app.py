@@ -1,57 +1,113 @@
 import gradio as gr
+import os
+import tempfile
+import mido
+from midi2audio import FluidSynth
 from inference import MidiSearchEngine
 
-# Initialize Engine
+# --- CONFIGURATION ---
+SOUNDFONT_PATH = "soundfont.sf2"  # Path to your .sf2 file
 engine = MidiSearchEngine()
 engine.initialize()
 
-def format_results(results):
-    output = []
-    for i, res in enumerate(results):
-        score_percentage = res['rank_score'] * 100
+def tokens_to_midi(tokens, output_path):
+    """
+    Converts token IDs to a MIDI file.
+    Note: Replace the logic inside the loop with your specific Detokenizer/Vocabulary 
+    mapping for accurate musical reconstruction.
+    """
+    try:
+        mid = mido.MidiFile()
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
         
-        # Determine which model contributed more
-        v1_conf = res['v1_score']
-        v2_conf = res['v2_score']
-        dominant = "Balanced"
-        if v1_conf > v2_conf + 0.05: dominant = "Temporal (V1)"
-        if v2_conf > v1_conf + 0.05: dominant = "Semantic (V2)"
+        # Default placeholder logic: map tokens to notes
+        # Assumes tokens correlate to pitch/duration. Adjust based on your vocabulary.
+        time_accum = 0
+        for t in tokens:
+            if isinstance(t, int):
+                # Safe mapping to MIDI range 0-127
+                note = t % 128
+                # Note On
+                track.append(mido.Message('note_on', note=note, velocity=64, time=0))
+                # Note Off (Arbitrary duration)
+                track.append(mido.Message('note_off', note=note, velocity=64, time=240))
+        
+        mid.save(output_path)
+        return True
+    except Exception as e:
+        print(f"MIDI Generation Error: {e}")
+        return False
 
-        md = f"""
-        ### Result {i+1}
-        * **Consensus Score:** {res['rank_score']:.4f}
-        * **V1 Score:** {res['v1_score']:.4f} | **V2 Score:** {res['v2_score']:.4f}
-        * **Dominant Model:** {dominant}
-        * **Token Count:** {len(res['midi_tokens'])}
-        ---
-        """
-        output.append(md)
-    return "\n".join(output)
+def render_audio(midi_path, output_wav_path):
+    if not os.path.exists(SOUNDFONT_PATH):
+        return None
+    try:
+        fs = FluidSynth(SOUNDFONT_PATH)
+        fs.midi_to_audio(midi_path, output_wav_path)
+        return output_wav_path
+    except Exception as e:
+        print(f"Audio Render Error: {e}")
+        return None
 
 def search_interface(query):
     if not query.strip():
-        return "Please enter a search query."
+        return [None] * 9
     
-    try:
-        results = engine.search(query, top_k=5)
-        return format_results(results)
-    except Exception as e:
-        return f"Error: {str(e)}"
+    results = engine.search(query, top_k=3)
+    outputs = []
+    
+    for i in range(3):
+        if i < len(results):
+            res = results[i]
+            tokens = res['midi_tokens'].tolist() if hasattr(res['midi_tokens'], 'tolist') else res['midi_tokens']
+            
+            # Create temp files
+            temp_mid = tempfile.NamedTemporaryFile(delete=False, suffix=".mid").name
+            temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+            
+            # Generate MIDI and Audio
+            has_midi = tokens_to_midi(tokens, temp_mid)
+            wav_path = render_audio(temp_mid, temp_wav) if has_midi else None
+            
+            # Format Output
+            info = f"### Result {i+1}\n**Consensus Score:** {res['rank_score']:.4f}"
+            
+            outputs.append(info)
+            outputs.append(wav_path)
+            outputs.append(temp_mid)
+        else:
+            outputs.extend([None, None, None])
+            
+    return outputs
 
-# Gradio UI
-with gr.Blocks(title="Ensemble MIDI Retrieval") as demo:
+# --- GRADIO UI ---
+with gr.Blocks(title="Neural MIDI Search") as demo:
     gr.Markdown("# Ensemble Neural MIDI Retrieval")
-    gr.Markdown("Bi-LSTM + Transformer Late Fusion Strategy")
     
     with gr.Row():
-        txt_input = gr.Textbox(lines=1, placeholder="Describe the music (e.g., 'A fast jazz piano solo')...", label="Search Query")
+        txt_input = gr.Textbox(lines=1, placeholder="Describe the music...", label="Search Query")
         btn_submit = gr.Button("Search", variant="primary")
+
+    # Result Slots
+    for i in range(1, 4):
+        with gr.Group():
+            with gr.Row():
+                gr.Markdown(f"### Rank {i}")
+            with gr.Row():
+                info_box = gr.Markdown()
+                audio_player = gr.Audio(label="Preview", type="filepath")
+                file_download = gr.File(label="Download MIDI", file_count="single")
+                
+                # Dynamic variable assignment for output mapping
+                if i == 1: r1_out = [info_box, audio_player, file_download]
+                elif i == 2: r2_out = [info_box, audio_player, file_download]
+                elif i == 3: r3_out = [info_box, audio_player, file_download]
+
+    all_outputs = r1_out + r2_out + r3_out
     
-    with gr.Row():
-        txt_output = gr.Markdown(label="Retrieval Results")
-        
-    btn_submit.click(search_interface, inputs=txt_input, outputs=txt_output)
-    txt_input.submit(search_interface, inputs=txt_input, outputs=txt_output)
+    btn_submit.click(search_interface, inputs=txt_input, outputs=all_outputs)
+    txt_input.submit(search_interface, inputs=txt_input, outputs=all_outputs)
 
 if __name__ == "__main__":
-    demo.launch(share = True)
+    demo.launch(share=True)
