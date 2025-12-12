@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader, Dataset
 from huggingface_hub import hf_hub_download
 
 # Import from local file 'ensemble.py'
-from ensemble import load_model, compute_similarity_matrix, HF_REPO_ID
+from ensemble_system import load_model, compute_similarity_matrix, HF_REPO_ID
 
 # --- CONFIGURATION ---
 TEST_FILENAME = "test_midicaps_tokenized.pt"
