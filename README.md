@@ -1,53 +1,62 @@
-# Neural MIDI Retrieval System
+# Ensemble Neural MIDI Retrieval System
 
-This repository implements a **Cross-Modal Information Retrieval** system capable of searching for MIDI music files using natural language queries. 
+This repository implements a **Cross-Modal Information Retrieval System** designed to search for MIDI music files using natural language queries.
 
-The core of the project is a Deep Learning architecture that learns a joint embedding space for both **Text** and **Symbolic Music** (MIDI), allowing users to find music based on semantic descriptions (e.g., *"A melancholic piano melody in A minor"*).
+The core of the project is an **Ensemble Architecture** that combines the strengths of two distinct neural network models (Recurrent and Transformer-based) to map text and symbolic music into a unified vector space.
 
-## Methodology
+## System Architecture: The Ensemble Approach
 
-The system relies on a **Bi-Encoder Architecture** designed to map two different modalities (Text and Music) into a shared high-dimensional vector space.
+To achieve robust retrieval performance, the system does not rely on a single model. Instead, it utilizes an **Ensemble Strategy** that fuses predictions from two different architectures. This allows the system to capture both the long-range semantic dependencies and the sequential rhythmic nuances of music.
 
-### 1. Model Architecture (V2)
-The architecture consists of two parallel streams:
+### 1. Model V1: The Temporal Expert (Bi-LSTM)
+* **Architecture:** Bidirectional LSTM (Long Short-Term Memory).
+* **Role:** Optimized for processing sequential data, this model excels at capturing the temporal flow, rhythm, and local melodic structures of the MIDI files.
+* **Text Encoder:** `sentence-transformers/all-MiniLM-L6-v2` (Optimized for speed/efficiency).
 
-* **Text Encoder:** We utilize a pre-trained **MPNet** (`sentence-transformers/all-mpnet-base-v2`), which is frozen or fine-tuned to extract rich semantic features from the text queries.
-* **Music Encoder:** A custom **Transformer-based Neural Network**. It processes MIDI files as sequences of tokens (pitch, velocity, duration) to generate a dense vector representation of the musical content.
+### 2. Model V2: The Semantic Expert (Transformer)
+* **Architecture:** Custom 4-Layer Transformer.
+* **Role:** Utilizing Self-Attention mechanisms, this model captures global context and complex harmonic relationships within the music, aligning them with high-level semantic descriptions.
+* **Text Encoder:** `sentence-transformers/all-mpnet-base-v2` (State-of-the-art semantic embedding).
 
-### 2. Training Objective: Contrastive Loss
-To align the text and music representations, the model is trained using **Symmetric Contrastive Loss** (CLIP-style loss). 
+### 3. Ensemble Fusion (Late Fusion)
+During inference, the system processes the user's query through both V1 and V2 pipelines simultaneously.
+1.  **V1 Inference:** Calculates the Cosine Similarity score between the query and the V1 database.
+2.  **V2 Inference:** Calculates the Cosine Similarity score between the query and the V2 database.
+3.  **Score Averaging:** The final relevance score is computed as the arithmetic mean of the two:
+    $$Score_{final} = \frac{Score_{V1} + Score_{V2}}{2}$$
 
-The objective function works by:
-* **Maximizing** the cosine similarity between matched pairs (Correct Text, Correct Music).
-* **Minimizing** the similarity between unmatched pairs (Correct Text, Random Music) within the same batch.
+This "consensus" approach reduces variance and improves the ranking of retrieved results.
 
-This forces the model to "pull" the vectors of a song and its correct description closer together while "pushing" unrelated songs away.
+## Training Methodology
+
+Both models were trained using **Symmetric Contrastive Loss** (InfoNCE), a technique popularized by models like CLIP.
+
+The objective is to learn a joint embedding space where:
+* The embedding of a song and its correct text description are pulled close together (Maximizing Similarity).
+* The embedding of a song and unrelated text descriptions are pushed apart (Minimizing Similarity).
 
 $$ 
 \mathcal{L} = - \frac{1}{N} \sum_{i=1}^{N} \log \frac{\exp(sim(T_i, M_i) / \tau)}{\sum_{j=1}^{N} \exp(sim(T_i, M_j) / \tau)} 
 $$
 
-*(Where $T$ and $M$ are text and music embeddings, and $\tau$ is the temperature parameter).*
+*(Where $T$ is the text vector, $M$ is the music vector, and $\tau$ is a learnable temperature parameter).*
 
-## Inference Pipeline
+## Dynamic Inference Engine
 
-The inference engine performs efficient similarity search without requiring a pre-indexed database file.
+The system features a **Dynamic Indexing** mechanism to ensure flexibility and consistency:
 
-1.  **Dynamic Indexing:** Upon initialization, the system automatically loads the tokenized dataset and computes the embeddings for over 150,000 songs in real-time. This ensures the search index is always synchronized with the current model weights.
-2.  **Retrieval:** When a user inputs a query:
-    * The text is encoded into a vector $V_{text}$.
-    * The system calculates the **Cosine Similarity** between $V_{text}$ and the entire music database matrix.
-    * The top-k results are retrieved and synthesized into audio for preview.
+* **Auto-Build:** Upon initialization, the inference engine loads the raw tokenized dataset (approx. 150k songs). It processes this data in real-time using the loaded model weights to construct the vector database in memory.
+* **Retrieval:** The system performs a dual-search (V1 + V2) over this generated index to retrieve the top-k most relevant MIDI files.
 
 ## Installation & Usage
 
 ### Prerequisites
 * Python 3.8+
-* FluidSynth (for MIDI-to-Audio rendering)
+* **FluidSynth** (Required for rendering MIDI preview audio)
 
 ```bash
-# Install FluidSynth (Linux/Colab)
+# Linux / Google Colab System Dependency
 sudo apt-get install -y fluidsynth
 
-# Install Python dependencies
-pip install -r requirements.txt
+# Python Dependencies
+pip install torch transformers huggingface_hub midi2audio sklearn gradio pyfluidsynth tqdm
