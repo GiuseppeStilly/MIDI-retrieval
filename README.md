@@ -1,5 +1,5 @@
 # MIDI-retrieval
-# AI MIDI Retrieval System (Text-to-Music)
+# AI MIDI Retrieval System (Text-to-MIDI)
 
 This repository hosts a **Neural MIDI Retrieval System** that allows users to search for MIDI files using natural language queries (e.g., *"A sad piano melody in A minor"*). 
 
