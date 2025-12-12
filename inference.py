@@ -8,15 +8,17 @@ import os
 
 from ensemble_system import NeuralMidiSearch_V1, NeuralMidiSearch_V2
 
-# Configuration
+# --- CONFIGURATION ---
 HF_REPO_ID = "GiuseppeStilly/MIDI-Retrieval"
-DATASET_FILENAME = "test_midicaps_tokenized.pt"
+DATASET_FILENAME = "dataset_midicaps_tokenized.pt"  # Corrected target
 MODEL_V1_NAME = "v1_lstm_optimized.pt"
 MODEL_V2_NAME = "v2_transformer_mpnet.pt"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+BATCH_SIZE = 128  # Increased batch size for faster indexing
 
 class InferenceDataset(Dataset):
     def __init__(self, data_path):
+        print(f"Loading database from {data_path}...")
         self.data = torch.load(data_path, map_location="cpu")
     
     def __len__(self):
@@ -43,29 +45,37 @@ class MidiSearchEngine:
     def initialize(self):
         print("Initializing Search Engine...")
         
-        # Load Dataset
+        # 1. Load Dataset
         try:
-            data_path = hf_hub_download(repo_id=HF_REPO_ID, filename=DATASET_FILENAME, repo_type="model")
+            data_path = hf_hub_download(repo_id=HF_REPO_ID, filename=DATASET_FILENAME, repo_type="dataset")
+            # Note: repo_type might default to model, but sometimes datasets are stored differently. 
+            # If it fails, remove repo_type="dataset".
             dataset = InferenceDataset(data_path)
             self.raw_data = dataset.data
-            print(f"Dataset loaded: {len(self.raw_data)} items")
+            print(f"Database loaded: {len(self.raw_data)} songs")
         except Exception as e:
-            print(f"Dataset load error: {e}")
-            return False
+            # Fallback to model repo type if dataset type fails
+            try:
+                data_path = hf_hub_download(repo_id=HF_REPO_ID, filename=DATASET_FILENAME)
+                dataset = InferenceDataset(data_path)
+                self.raw_data = dataset.data
+            except Exception as e2:
+                print(f"Critical error loading dataset: {e2}")
+                return False
 
-        # Load Models
+        # 2. Load Models
         self.model_v1 = self._load_model(NeuralMidiSearch_V1, MODEL_V1_NAME)
         self.model_v2 = self._load_model(NeuralMidiSearch_V2, MODEL_V2_NAME)
         
-        # Load Tokenizers
+        # 3. Load Tokenizers
         self.tokenizer_v1 = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
         self.tokenizer_v2 = AutoTokenizer.from_pretrained("sentence-transformers/all-mpnet-base-v2")
 
         if not self.model_v1 or not self.model_v2:
             return False
 
-        # Build Vectors Index
-        print("Building Vector Index...")
+        # 4. Build Vector Index
+        print("Building Vector Index (this may take time)...")
         self.index_v1 = self._compute_embeddings(self.model_v1, dataset)
         self.index_v2 = self._compute_embeddings(self.model_v2, dataset)
         
@@ -88,7 +98,7 @@ class MidiSearchEngine:
             return None
 
     def _compute_embeddings(self, model, dataset):
-        loader = DataLoader(dataset, batch_size=64, shuffle=False)
+        loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False)
         embeddings = []
         
         with torch.no_grad():
@@ -112,7 +122,7 @@ class MidiSearchEngine:
             inputs_v2 = self.tokenizer_v2(text_query, return_tensors="pt", padding=True, truncation=True).to(DEVICE)
             q_emb_v2 = self.model_v2.encode_text(inputs_v2["input_ids"], inputs_v2["attention_mask"])
 
-            # Compute Similarity
+            # Compute Similarity (Dot Product on Normalized Vectors = Cosine Similarity)
             sim_v1 = torch.mm(q_emb_v1, self.index_v1.T).squeeze(0)
             sim_v2 = torch.mm(q_emb_v2, self.index_v2.T).squeeze(0)
 
