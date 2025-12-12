@@ -1,43 +1,53 @@
-# MIDI-retrieval
-# AI MIDI Retrieval System (Text-to-MIDI)
+# Neural MIDI Retrieval System
 
-This repository hosts a **Neural MIDI Retrieval System** that allows users to search for MIDI files using natural language queries (e.g., *"A sad piano melody in A minor"*). 
+This repository implements a **Cross-Modal Information Retrieval** system capable of searching for MIDI music files using natural language queries. 
 
-The system projects both **Text** and **Music** into a shared embedding space, enabling semantic search via Cosine Similarity.
+The core of the project is a Deep Learning architecture that learns a joint embedding space for both **Text** and **Symbolic Music** (MIDI), allowing users to find music based on semantic descriptions (e.g., *"A melancholic piano melody in A minor"*).
 
-##  Project Goal
-The objective was to deploy a pre-trained cross-modal search engine capable of retrieving music from the **MidiCaps dataset** (approx. 150k MIDI files). 
+## Methodology
 
-### The Challenge & Solution
-During deployment, we identified that the pre-trained model checkpoints contained the neural network weights (the "Brain") but lacked the pre-computed vector database (the "Memory/Index" of the songs).
+The system relies on a **Bi-Encoder Architecture** designed to map two different modalities (Text and Music) into a shared high-dimensional vector space.
 
-**Our Solution:**
-We implemented a robust **Auto-Build Mechanism** in the inference engine.
-1. On startup, the system checks if the model checkpoint contains the database matrix.
-2. If missing, it automatically downloads the `tokenized_dataset` from Hugging Face.
-3. It uses the model to process the 150k songs in real-time (in memory) to reconstruct the vector index.
-4. This ensures the app works "out of the box" without requiring manual preprocessing scripts.
+### 1. Model Architecture (V2)
+The architecture consists of two parallel streams:
 
-##  Architecture
+* **Text Encoder:** We utilize a pre-trained **MPNet** (`sentence-transformers/all-mpnet-base-v2`), which is frozen or fine-tuned to extract rich semantic features from the text queries.
+* **Music Encoder:** A custom **Transformer-based Neural Network**. It processes MIDI files as sequences of tokens (pitch, velocity, duration) to generate a dense vector representation of the musical content.
 
-The system supports two architectures, though **V2** is the recommended default:
+### 2. Training Objective: Contrastive Loss
+To align the text and music representations, the model is trained using **Symmetric Contrastive Loss** (CLIP-style loss). 
 
-* **V2 (Transformer):**
-    * **Text Encoder:** `sentence-transformers/all-mpnet-base-v2`
-    * **Music Encoder:** A 4-layer Transformer trained to align with MPNet embeddings.
-    * **Performance:** Higher accuracy in semantic understanding.
+The objective function works by:
+* **Maximizing** the cosine similarity between matched pairs (Correct Text, Correct Music).
+* **Minimizing** the similarity between unmatched pairs (Correct Text, Random Music) within the same batch.
 
-* **V1 (Bi-LSTM):**
-    * **Text Encoder:** `sentence-transformers/all-MiniLM-L6-v2`
-    * **Music Encoder:** Bidirectional LSTM.
-    * **Status:** Legacy/Optimized for speed.
+This forces the model to "pull" the vectors of a song and its correct description closer together while "pushing" unrelated songs away.
 
-##  Installation
+$$ 
+\mathcal{L} = - \frac{1}{N} \sum_{i=1}^{N} \log \frac{\exp(sim(T_i, M_i) / \tau)}{\sum_{j=1}^{N} \exp(sim(T_i, M_j) / \tau)} 
+$$
+
+*(Where $T$ and $M$ are text and music embeddings, and $\tau$ is the temperature parameter).*
+
+## Inference Pipeline
+
+The inference engine performs efficient similarity search without requiring a pre-indexed database file.
+
+1.  **Dynamic Indexing:** Upon initialization, the system automatically loads the tokenized dataset and computes the embeddings for over 150,000 songs in real-time. This ensures the search index is always synchronized with the current model weights.
+2.  **Retrieval:** When a user inputs a query:
+    * The text is encoded into a vector $V_{text}$.
+    * The system calculates the **Cosine Similarity** between $V_{text}$ and the entire music database matrix.
+    * The top-k results are retrieved and synthesized into audio for preview.
+
+## Installation & Usage
 
 ### Prerequisites
 * Python 3.8+
-* **FluidSynth** (Required for converting MIDI to Audio for preview)
+* FluidSynth (for MIDI-to-Audio rendering)
 
-### 1. System Dependencies (Linux/Colab)
 ```bash
+# Install FluidSynth (Linux/Colab)
 sudo apt-get install -y fluidsynth
+
+# Install Python dependencies
+pip install -r requirements.txt
