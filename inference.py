@@ -1,22 +1,32 @@
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from huggingface_hub import hf_hub_download
 from transformers import AutoTokenizer
 from tqdm import tqdm
 import os
+import sys
 
-from ensemble_system import NeuralMidiSearch_V1, NeuralMidiSearch_V2
+# --- IMPORT MODEL ARCHITECTURES ---
+# This requires 'ensemble_system.py' to be in the same directory.
+try:
+    from ensemble_system import NeuralMidiSearch_V1, NeuralMidiSearch_V2
+except ImportError:
+    raise ImportError("Critical Error: 'ensemble_system.py' not found. Please clone the repository properly.")
 
 # --- CONFIGURATION ---
 HF_REPO_ID = "GiuseppeStilly/MIDI-Retrieval"
-DATASET_FILENAME = "dataset_midicaps_tokenized.pt"  # Corrected target
+DATASET_FILENAME = "dataset_midicaps_tokenized.pt"
 MODEL_V1_NAME = "v1_lstm_optimized.pt"
 MODEL_V2_NAME = "v2_transformer_mpnet.pt"
+
+# Detect device (GPU is highly recommended for indexing)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-BATCH_SIZE = 128  # Increased batch size for faster indexing
+BATCH_SIZE = 128 
 
 class InferenceDataset(Dataset):
+    """
+    Wrapper to load the pre-tokenized MIDI database.
+    """
     def __init__(self, data_path):
         print(f"Loading database from {data_path}...")
         self.data = torch.load(data_path, map_location="cpu")
@@ -26,6 +36,7 @@ class InferenceDataset(Dataset):
     
     def __getitem__(self, idx):
         item = self.data[idx]
+        # Handle different naming conventions in the dataset (m vs midi_ids)
         m = item.get("m", item.get("midi_ids", [0]))
         if not isinstance(m, torch.Tensor): 
             m = torch.tensor(m, dtype=torch.long)
@@ -43,50 +54,54 @@ class MidiSearchEngine:
         self.initialized = False
 
     def initialize(self):
-        print("Initializing Search Engine...")
+        """
+        Main setup function. Downloads models, loads data, and builds the search index.
+        """
+        print("--- Initializing Search Engine ---")
         
-        # 1. Load Dataset
+        # 1. Download and Load Dataset
         try:
+            print("Downloading dataset from HuggingFace...")
             data_path = hf_hub_download(repo_id=HF_REPO_ID, filename=DATASET_FILENAME, repo_type="dataset")
-            # Note: repo_type might default to model, but sometimes datasets are stored differently. 
-            # If it fails, remove repo_type="dataset".
-            dataset = InferenceDataset(data_path)
-            self.raw_data = dataset.data
-            print(f"Database loaded: {len(self.raw_data)} songs")
-        except Exception as e:
-            # Fallback to model repo type if dataset type fails
-            try:
-                data_path = hf_hub_download(repo_id=HF_REPO_ID, filename=DATASET_FILENAME)
-                dataset = InferenceDataset(data_path)
-                self.raw_data = dataset.data
-            except Exception as e2:
-                print(f"Critical error loading dataset: {e2}")
-                return False
+        except Exception:
+            # Fallback: sometimes datasets are stored in the model repo
+            print("Dataset not found in 'dataset' repo. Trying 'model' repo...")
+            data_path = hf_hub_download(repo_id=HF_REPO_ID, filename=DATASET_FILENAME)
+            
+        dataset = InferenceDataset(data_path)
+        self.raw_data = dataset.data
+        print(f"Database loaded successfully: {len(self.raw_data)} items.")
 
-        # 2. Load Models
+        # 2. Load Neural Models
+        print("Loading Neural Models (V1 & V2)...")
         self.model_v1 = self._load_model(NeuralMidiSearch_V1, MODEL_V1_NAME)
         self.model_v2 = self._load_model(NeuralMidiSearch_V2, MODEL_V2_NAME)
         
-        # 3. Load Tokenizers
+        if not self.model_v1 or not self.model_v2:
+            print("Error: Failed to load models.")
+            return False
+
+        # 3. Load Text Tokenizers (Sentence-Transformers)
+        # These must match the ones used during training
         self.tokenizer_v1 = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
         self.tokenizer_v2 = AutoTokenizer.from_pretrained("sentence-transformers/all-mpnet-base-v2")
 
-        if not self.model_v1 or not self.model_v2:
-            return False
-
-        # 4. Build Vector Index
-        print("Building Vector Index (this may take time)...")
+        # 4. Build Vector Index (The heavy lifting)
+        print("Building Search Index (Computing embeddings for all songs)...")
         self.index_v1 = self._compute_embeddings(self.model_v1, dataset)
         self.index_v2 = self._compute_embeddings(self.model_v2, dataset)
         
         self.initialized = True
-        print("System Ready.")
+        print("--- System Ready for Search ---")
         return True
 
     def _load_model(self, model_class, filename):
+        """Helper to download and load a PyTorch checkpoint."""
         try:
             path = hf_hub_download(repo_id=HF_REPO_ID, filename=filename)
             ckpt = torch.load(path, map_location=DEVICE)
+            
+            # Retrieve vocab size used during training
             vocab_size = ckpt.get('vocab_size', 3000)
             
             model = model_class(vocab_size).to(DEVICE)
@@ -94,54 +109,37 @@ class MidiSearchEngine:
             model.eval()
             return model
         except Exception as e:
-            print(f"Model load error ({filename}): {e}")
+            print(f"Error loading model {filename}: {e}")
             return None
 
     def _compute_embeddings(self, model, dataset):
+        """Runs the model on the entire dataset to create the search index."""
         loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False)
         embeddings = []
         
         with torch.no_grad():
             for batch in tqdm(loader, desc="Indexing"):
                 m_ids = batch["midi_ids"].to(DEVICE)
+                # Project MIDI tokens into the embedding space
                 emb = model.encode_midi(m_ids)
                 embeddings.append(emb.cpu())
         
         return torch.cat(embeddings).to(DEVICE)
 
     def search(self, text_query, top_k=5):
+        """
+        Performs the hybrid search using both V1 and V2 models.
+        """
         if not self.initialized:
-            raise RuntimeError("Engine not initialized.")
+            raise RuntimeError("Engine not initialized. Call initialize() first.")
 
         with torch.no_grad():
-            # Encode Query V1
-            inputs_v1 = self.tokenizer_v1(text_query, return_tensors="pt", padding=True, truncation=True).to(DEVICE)
-            q_emb_v1 = self.model_v1.encode_text(inputs_v1["input_ids"], inputs_v1["attention_mask"])
-
-            # Encode Query V2
-            inputs_v2 = self.tokenizer_v2(text_query, return_tensors="pt", padding=True, truncation=True).to(DEVICE)
-            q_emb_v2 = self.model_v2.encode_text(inputs_v2["input_ids"], inputs_v2["attention_mask"])
-
-            # Compute Similarity (Dot Product on Normalized Vectors = Cosine Similarity)
-            sim_v1 = torch.mm(q_emb_v1, self.index_v1.T).squeeze(0)
-            sim_v2 = torch.mm(q_emb_v2, self.index_v2.T).squeeze(0)
-
-            # Ensemble (Mean)
-            final_scores = (sim_v1 + sim_v2) / 2.0
-
-            # Ranking
-            top_scores, top_indices = torch.topk(final_scores, k=top_k)
+            # --- V1 Branch ---
+            i1 = self.tokenizer_v1(text_query, return_tensors="pt", padding=True, truncation=True).to(DEVICE)
+            text_emb_v1 = self.model_v1.encode_text(i1["input_ids"], i1["attention_mask"])
             
-            results = []
-            for score, idx in zip(top_scores, top_indices):
-                idx_val = idx.item()
-                raw_item = self.raw_data[idx_val]
-                results.append({
-                    "rank_score": score.item(),
-                    "v1_score": sim_v1[idx_val].item(),
-                    "v2_score": sim_v2[idx_val].item(),
-                    "midi_tokens": raw_item.get("m", raw_item.get("midi_ids")),
-                    "metadata": raw_item
-                })
+            # --- V2 Branch ---
+            i2 = self.tokenizer_v2(text_query, return_tensors="pt", padding=True, truncation=True).to(DEVICE)
+            text_emb_v2 = self.model_v2.encode_text(i2["input_ids"], i2["attention_mask"])
             
-            return results
+            #
