@@ -32,7 +32,7 @@ The system supports two architectures, though **V2** is the recommended default:
     * **Music Encoder:** Bidirectional LSTM.
     * **Status:** Legacy/Optimized for speed.
 
-## 🛠️ Installation
+##  Installation
 
 ### Prerequisites
 * Python 3.8+
