@@ -54,4 +54,4 @@ with gr.Blocks(title="Ensemble MIDI Retrieval") as demo:
     txt_input.submit(search_interface, inputs=txt_input, outputs=txt_output)
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(share = True)
