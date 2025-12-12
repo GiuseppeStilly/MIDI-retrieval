@@ -1,6 +1,6 @@
 import sys
 import os
-from inference_engine import MidiSearchEngine  # Imports your engine
+from inference import MidiSearchEngine  # Imports your engine
 from miditok import REMI, TokenizerConfig      # Imports the decoder
 
 def main():
