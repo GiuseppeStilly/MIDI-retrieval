@@ -6,9 +6,7 @@ print("Initializing Transformer Search Engine...")
 engine = SearchEngine()
 
 # 2. Define Custom Theme
-# We create a custom theme to match the "Neural MIDI Search" presentation:
-# - Background: Deep Dark Blue (representing the slide background)
-# - Accents: Neon Pink (representing arrows and highlights)
+
 custom_theme = gr.themes.Default(
     primary_hue="pink",   # Base color for primary actions (Pink)
     neutral_hue="slate",  # Base color for structure (Cool dark grays)
