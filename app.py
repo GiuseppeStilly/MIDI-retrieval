@@ -1,5 +1,5 @@
 import gradio as gr
-from inference_engine import MIDI_Search_Engine
+from inference import MIDI_Search_Engine
 
 # 1. Initialize the Engine (Runs once on startup)
 print("Starting Gradio server...")
