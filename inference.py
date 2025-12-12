@@ -10,7 +10,11 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader, Dataset
 
 # Importiamo le classi dal tuo file esistente
-from ensemble_system import NeuralMidiSearch_V1, NeuralMidiSearch_V2
+try:
+    from ensemble_system import NeuralMidiSearch_V1, NeuralMidiSearch_V2
+except ImportError:
+    # Fallback se eseguiamo direttamente questo file per test
+    pass
 
 # --- CONFIGURAZIONE ---
 HF_REPO_ID = "GiuseppeStilly/MIDI-Retrieval"
@@ -19,13 +23,13 @@ MODEL_V2_FILENAME = "v2_transformer_mpnet.pt"
 DATASET_FILENAME = "test_midicaps_tokenized.pt"
 
 SOUNDFONT_URL = "https://schristiancollins.com/generaluser-gs/GeneralUser_GS_1.471.zip"
-SOUNDFONT_PATH = "GeneralUser_GS_1.471.sf2"
-MIDI_DATA_DIR = "midicaps_data" # Cartella dove scaricare i midi raw per l'audio
+# Variabile globale modificabile
+SOUNDFONT_PATH = "GeneralUser_GS_1.471.sf2" 
+MIDI_DATA_DIR = "midicaps_data" 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class InferenceDataset(Dataset):
-    """Dataset semplice per caricare i token per l'indicizzazione"""
     def __init__(self, data_path):
         self.data = torch.load(data_path, map_location="cpu")
     
@@ -33,7 +37,6 @@ class InferenceDataset(Dataset):
     
     def __getitem__(self, idx):
         item = self.data[idx]
-        # Gestione compatibilità nomi chiavi
         m = item.get("m", item.get("midi_ids", [0]))
         if not isinstance(m, torch.Tensor): m = torch.tensor(m, dtype=torch.long)
         return {"midi_ids": m, "path": item.get("path", "unknown")}
@@ -43,20 +46,22 @@ class EnsembleSearchEngine:
         print("--- Initializing Ensemble Search Engine ---")
         self.model_v1 = None
         self.model_v2 = None
-        self.tokenizer_v1 = None # MiniLM
-        self.tokenizer_v2 = None # MPNet
+        self.tokenizer_v1 = None 
+        self.tokenizer_v2 = None 
         
-        # Database in memoria
         self.db_matrix_v1 = None
         self.db_matrix_v2 = None
         self.db_paths = []
         
         self.setup_resources()
         self.load_models()
-        self.build_index() # Pre-calcola gli embedding
+        self.build_index() 
         
     def setup_resources(self):
         """Scarica SoundFont, MIDI raw e installa FluidSynth se necessario"""
+        # CORREZIONE QUI: Dichiariamo global SUBITO
+        global SOUNDFONT_PATH 
+        
         # 1. FluidSynth check (Linux)
         if os.name == 'posix':
             if os.system("which fluidsynth > /dev/null 2>&1") != 0:
@@ -64,20 +69,25 @@ class EnsembleSearchEngine:
                 os.system("apt-get update -y && apt-get install -y fluidsynth")
 
         # 2. SoundFont
+        # Ora possiamo usare SOUNDFONT_PATH tranquillamente
         if not os.path.exists(SOUNDFONT_PATH):
             print("Downloading SoundFont...")
             os.system(f"curl -L {SOUNDFONT_URL} -o soundfont.zip")
             with zipfile.ZipFile("soundfont.zip", 'r') as zip_ref:
                 zip_ref.extractall(".")
-            # Trova il file sf2 estratto
+            
+            # Cerca il file sf2 estratto e aggiorna la variabile globale
+            found = False
             for root, dirs, files in os.walk("."):
                 for file in files:
                     if file.endswith(".sf2"):
-                        global SOUNDFONT_PATH
                         SOUNDFONT_PATH = os.path.join(root, file)
+                        found = True
                         break
+                if found: break
+            print(f"SoundFont found at: {SOUNDFONT_PATH}")
 
-        # 3. Raw MIDI Data (per il playback audio)
+        # 3. Raw MIDI Data
         if not os.path.exists(MIDI_DATA_DIR):
             print("Downloading Raw MIDI files...")
             try:
@@ -109,8 +119,7 @@ class EnsembleSearchEngine:
         print("Models Loaded.")
 
     def build_index(self):
-        """Passa tutto il dataset attraverso i modelli per creare l'indice di ricerca."""
-        print("Building Search Index (this happens only once at startup)...")
+        print("Building Search Index...")
         
         data_path = hf_hub_download(repo_id=HF_REPO_ID, filename=DATASET_FILENAME, repo_type="model")
         ds = InferenceDataset(data_path)
@@ -129,7 +138,7 @@ class EnsembleSearchEngine:
                 v1_out = self.model_v1.encode_midi(m_ids)
                 embs_v1.append(v1_out.cpu())
                 
-                # Encode V2 (Mixed Precision per velocità)
+                # Encode V2 (Mixed Precision)
                 with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
                     v2_out = self.model_v2.encode_midi(m_ids)
                 embs_v2.append(v2_out.float().cpu())
@@ -142,38 +151,32 @@ class EnsembleSearchEngine:
         if not self.model_v1 or not self.model_v2:
             return "Models not loaded", None, None
 
-        # 1. Encode Text Query (V1 & V2)
+        # 1. Encode Text Query
         with torch.no_grad():
-            # V1 Input
             i1 = self.tokenizer_v1([query_text], padding=True, truncation=True, return_tensors="pt").to(DEVICE)
             q_emb_v1 = self.model_v1.encode_text(i1["input_ids"], i1["attention_mask"]).cpu()
             
-            # V2 Input
             i2 = self.tokenizer_v2([query_text], padding=True, truncation=True, return_tensors="pt").to(DEVICE)
             q_emb_v2 = self.model_v2.encode_text(i2["input_ids"], i2["attention_mask"]).cpu()
 
-        # 2. Compute Similarity
+        # 2. Compute Similarity & Ensemble
         sim_v1 = q_emb_v1 @ self.db_matrix_v1.T
         sim_v2 = q_emb_v2 @ self.db_matrix_v2.T
-        
-        # 3. Ensemble Averaging
         final_sim = (sim_v1 + sim_v2) / 2.0
         
-        # 4. Get Best Result
+        # 3. Best Result
         best_idx = torch.argmax(final_sim).item()
         best_score = final_sim[0, best_idx].item()
-        best_path_raw = self.db_paths[best_idx] # Path salvato nel tensore (es. "data/name.mid")
+        best_path_raw = self.db_paths[best_idx]
         filename = os.path.basename(best_path_raw)
         
-        # 5. Audio Generation logic
-        # Cerchiamo il file effettivo nella cartella scaricata
+        # 4. Audio Generation
         local_midi_path = os.path.join(MIDI_DATA_DIR, "midicaps", filename)
         if not os.path.exists(local_midi_path):
-             # Fallback: prova nella root della cartella scaricata
              local_midi_path = os.path.join(MIDI_DATA_DIR, filename)
 
         audio_out = "result.wav"
-        status_msg = f"Found: {filename}\nEnsemble Score: {best_score:.4f}\n(Avg of V1 & V2)"
+        status_msg = f"Found: {filename}\nEnsemble Score: {best_score:.4f}"
 
         if os.path.exists(local_midi_path):
             try:
