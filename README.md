@@ -47,6 +47,35 @@ The system features a **Dynamic Indexing** mechanism to ensure flexibility and c
 
 * **Auto-Build:** Upon initialization, the inference engine loads the raw tokenized dataset (approx. 150k songs). It processes this data in real-time using the loaded model weights to construct the vector database in memory.
 * **Retrieval:** The system performs a dual-search (V1 + V2) over this generated index to retrieve the top-k most relevant MIDI files.
+Quick Start (Google Colab)
+import os
+
+# Configuration
+GITHUB_USERNAME = "GiuseppeStilly" 
+REPO_NAME = "MIDI-Retrieval" 
+
+# 1. Install System Audio Drivers (FluidSynth)
+print("Installing FluidSynth...")
+!apt-get update -qq
+!apt-get install -y fluidsynth fluid-soundfont-gm -qq
+
+# 2. Clone Repository
+if not os.path.exists(REPO_NAME):
+    print(f"Cloning {REPO_NAME}...")
+    !git clone https://github.com/{GITHUB_USERNAME}/{REPO_NAME}.git
+else:
+    %cd {REPO_NAME}
+    !git pull
+    %cd ..
+
+# 3. Install Python Dependencies
+print("Installing Python libraries...")
+%cd {REPO_NAME}
+!pip install -q -r requirements.txt
+
+# 4. Launch Application
+print("Launching Application...")
+!python app.py
 
 ## Installation & Usage
 
