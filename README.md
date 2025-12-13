@@ -48,8 +48,11 @@ The system features a **Dynamic Indexing** mechanism to ensure flexibility and c
 * **Auto-Build:** Upon initialization, the inference engine loads the raw tokenized dataset (approx. 150k songs). It processes this data in real-time using the loaded model weights to construct the vector database in memory.
 * **Retrieval:** The system performs a dual-search (V1 + V2) over this generated index to retrieve the top-k most relevant MIDI files.
 
-Quick Start (Google Colab)
-'''python
+## Quick Start (Google Colab)
+
+The easiest way to run this application is via Google Colab. Copy and paste the following code into a code cell in a new Colab notebook to clone the repository, install dependencies, and launch the interface.
+
+```python
 import os
 
 # Configuration
@@ -64,7 +67,7 @@ print("Installing FluidSynth...")
 # 2. Clone Repository
 if not os.path.exists(REPO_NAME):
     print(f"Cloning {REPO_NAME}...")
-    !git clone https://github.com/{GITHUB_USERNAME}/{REPO_NAME}.git
+    !git clone [https://github.com/](https://github.com/){GITHUB_USERNAME}/{REPO_NAME}.git
 else:
     %cd {REPO_NAME}
     !git pull
@@ -78,7 +81,7 @@ print("Installing Python libraries...")
 # 4. Launch Application
 print("Launching Application...")
 !python app.py
-'''
+```
 ## Installation & Usage
 
 ### Prerequisites
