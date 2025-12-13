@@ -134,7 +134,8 @@ def search_ensemble(query):
     
     # V1 Calculation
     scores_v1 = None
-    if v1_res[0] and v1_res[1]:
+    # --- FIXED HERE: Explicit None check ---
+    if v1_res[0] is not None and v1_res[1] is not None:
         m1, b1, t1 = v1_res
         inp = t1(query, padding=True, truncation=True, return_tensors="pt").to(DEVICE)
         with torch.no_grad():
@@ -143,7 +144,7 @@ def search_ensemble(query):
 
     # V2 Calculation
     scores_v2 = None
-    if v2_res[0] and v2_res[1]:
+    if v2_res[0] is not None and v2_res[1] is not None:
         m2, b2, t2 = v2_res
         inp = t2(query, padding=True, truncation=True, return_tensors="pt").to(DEVICE)
         with torch.no_grad():
