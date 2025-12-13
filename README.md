@@ -47,8 +47,9 @@ The system features a **Dynamic Indexing** mechanism to ensure flexibility and c
 
 * **Auto-Build:** Upon initialization, the inference engine loads the raw tokenized dataset (approx. 150k songs). It processes this data in real-time using the loaded model weights to construct the vector database in memory.
 * **Retrieval:** The system performs a dual-search (V1 + V2) over this generated index to retrieve the top-k most relevant MIDI files.
+
 Quick Start (Google Colab)
-import os
+'''import os
 
 # Configuration
 GITHUB_USERNAME = "GiuseppeStilly" 
@@ -76,7 +77,7 @@ print("Installing Python libraries...")
 # 4. Launch Application
 print("Launching Application...")
 !python app.py
-
+'''
 ## Installation & Usage
 
 ### Prerequisites
