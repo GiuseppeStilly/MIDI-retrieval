@@ -49,7 +49,8 @@ The system features a **Dynamic Indexing** mechanism to ensure flexibility and c
 * **Retrieval:** The system performs a dual-search (V1 + V2) over this generated index to retrieve the top-k most relevant MIDI files.
 
 Quick Start (Google Colab)
-'''import os
+'''python
+import os
 
 # Configuration
 GITHUB_USERNAME = "GiuseppeStilly" 
