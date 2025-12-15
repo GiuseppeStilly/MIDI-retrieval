@@ -6,7 +6,7 @@ The core of the project is an **Ensemble Architecture** that combines the streng
 
 ## System Architecture: The Ensemble Approach
 
-To achieve robust retrieval performance, the system does not rely on a single model. Instead, it utilizes an **Ensemble Strategy** that fuses predictions from two different architectures. This allows the system to capture both the long-range semantic dependencies and the sequential rhythmic nuances of music.
+To achieve robust retrieval performance, the system utilizes an **Ensemble Strategy** that fuses predictions from two different architectures. This allows the system to capture both the long-range semantic dependencies and the sequential rhythmic nuances of music.
 
 ### 1. Model V1: The Temporal Expert (Bi-LSTM)
 * **Architecture:** Bidirectional LSTM (Long Short-Term Memory).
@@ -27,6 +27,17 @@ During inference, the system processes the user's query through both V1 and V2 p
 
 This "consensus" approach reduces variance and improves the ranking of retrieved results.
 
+## Symbolic Data Representation (REMI)
+
+Unlike audio-based retrieval systems, this project operates entirely in the symbolic domain. Raw MIDI files are processed using the **REMI (REvamped MIDI)** tokenization scheme.
+
+REMI converts musical data into a structured sequence of discrete tokens that explicitly model musical structure:
+* **Metric Structure:** `Bar` and `Position` tokens to encode precise timing and rhythm within measures.
+* **Note Attributes:** `Pitch`, `Velocity` (dynamics), and `Duration` tokens to capture melody and expression.
+* **Harmony:** Explicit chord representation.
+
+This tokenization allows the neural models to "read" music as a language, preserving both rhythmic precision and harmonic context without the computational cost of raw audio processing.
+
 ## Training Methodology
 
 Both models were trained using **Symmetric Contrastive Loss** (InfoNCE), a technique popularized by models like CLIP.
@@ -45,7 +56,7 @@ $$
 
 The system features a **Dynamic Indexing** mechanism to ensure flexibility and consistency:
 
-* **Auto-Build:** Upon initialization, the inference engine loads the raw tokenized dataset (approx. 150k songs). It processes this data in real-time using the loaded model weights to construct the vector database in memory.
+* **Auto-Build:** Upon initialization, the inference engine loads the raw tokenized dataset (approx. **168k songs**). It processes this data in real-time using the loaded model weights to construct the vector database in memory.
 * **Retrieval:** The system performs a dual-search (V1 + V2) over this generated index to retrieve the top-k most relevant MIDI files.
 
 ## Quick Start (Google Colab)
@@ -81,16 +92,3 @@ print("Installing Python libraries...")
 # 4. Launch Application
 print("Launching Application...")
 !python app.py
-```
-## Installation & Usage
-
-### Prerequisites
-* Python 3.8+
-* **FluidSynth** (Required for rendering MIDI preview audio)
-
-```bash
-# Linux / Google Colab System Dependency
-sudo apt-get install -y fluidsynth
-
-# Python Dependencies
-pip install torch transformers huggingface_hub midi2audio sklearn gradio pyfluidsynth tqdm
