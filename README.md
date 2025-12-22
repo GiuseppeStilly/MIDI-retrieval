@@ -4,6 +4,7 @@
 
 This repository implements a **Cross-Modal Information Retrieval System** designed to search for MIDI music files using natural language queries.
 
+
 The core of the project is an **Ensemble Architecture** that combines the strengths of two distinct neural network models (Recurrent and Transformer-based) to map text and symbolic music into a unified vector space.
 ## System Architecture: The Ensemble Approach
 
