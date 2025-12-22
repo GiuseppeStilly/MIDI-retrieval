@@ -70,8 +70,8 @@ The easiest way to run this application is via Google Colab. Copy and paste the 
 import os
 
 # Configuration
-GITHUB_USERNAME = "GiuseppeStilly" 
-REPO_NAME = "MIDI-Retrieval" 
+GITHUB_USERNAME = "GiuseppeStilly"
+REPO_NAME = "MIDI-Retrieval"
 
 # 1. Install System Audio Drivers (FluidSynth)
 print("Installing FluidSynth...")
@@ -81,7 +81,7 @@ print("Installing FluidSynth...")
 # 2. Clone Repository
 if not os.path.exists(REPO_NAME):
     print(f"Cloning {REPO_NAME}...")
-    !git clone [https://github.com/](https://github.com/){GITHUB_USERNAME}/{REPO_NAME}.git
+    !git clone https://github.com/{GITHUB_USERNAME}/{REPO_NAME}.git
 else:
     %cd {REPO_NAME}
     !git pull
@@ -95,3 +95,19 @@ print("Installing Python libraries...")
 # 4. Launch Application
 print("Launching Application...")
 !python app.py
+```
+##  Authors
+
+* **Giuseppe Stillitano** - *Deep Learning & Optimization*
+* **Edoardo Besteghi** - *Audio Processing & Domain Expertise*
+* **Riccardo Bucchi D'Incecco** - *System Integration & Full-Stack*
+
+## Acknowledgements & Credits
+
+This project builds upon several open-source libraries and research datasets. We would like to thank the creators for their contributions to the Music AI community:
+
+* **[MidiCaps Dataset](https://github.com/AMAAI-Lab/MidiCaps)**: For providing the large-scale aligned dataset of MIDI files and text captions that made this project possible.
+* **[MidiTok](https://github.com/Natooz/MidiTok)**: For the efficient MIDI tokenization library (REMI) used in our preprocessing pipeline.
+* **[Hugging Face Transformers](https://github.com/huggingface/transformers)**: For the pre-trained text encoders (`MiniLM` and `MPNet`) and the easy-to-use API.
+* **[FluidSynth](https://github.com/FluidSynth/fluidsynth)**: For the real-time software synthesizer used to render audio previews in our application.
+* **[CLaMP](https://github.com/microsoft/muzic/tree/main/clamp)** & **[MusicBERT](https://github.com/microsoft/muzic/tree/main/musicbert)**: For their pioneering work in symbolic music understanding which inspired our architectural choices.
