@@ -1,6 +1,6 @@
 # Ensemble Neural MIDI Retrieval System
 
-![System Architecture](foto/Gemini_Generated_Image_su11l2su11l2su11.png)
+![System Architecture](foto/schema.png)
 
 This repository implements a **Cross-Modal Information Retrieval System** designed to search for MIDI music files using natural language queries.
 
